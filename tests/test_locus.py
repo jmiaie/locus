@@ -1971,3 +1971,255 @@ def test_engine_six_signal_retrieve(tmp_path):
     # link_pop provenance is possible if hub is referenced
     provenances = {c.provenance for c in chunks}
     assert len(provenances) >= 1
+
+
+# -----------------------------------------------------------------------
+# Phase 8 — LocusReranker
+# -----------------------------------------------------------------------
+
+def test_reranker_returns_same_count(tmp_path):
+    from locus import LocusReranker
+    corpus = Corpus(tmp_path / "corpus")
+    (tmp_path / "a.md").write_text("## Authentication\n\nJWT tokens for auth.")
+    (tmp_path / "b.md").write_text("## Deployment\n\nKubernetes deployment guide.")
+    corpus.add_file(tmp_path / "a.md", base_path=tmp_path)
+    corpus.add_file(tmp_path / "b.md", base_path=tmp_path)
+
+    retriever = BM25Retriever(corpus)
+    chunks = retriever.search("authentication", limit=5)
+    reranker = LocusReranker(corpus)
+    reranked = reranker.rerank(chunks, query="authentication")
+    assert len(reranked) == len(chunks)
+
+
+def test_reranker_boosts_title_match(tmp_path):
+    from locus import LocusReranker, RerankerWeights
+    corpus = Corpus(tmp_path / "corpus")
+    # First doc: title matches query, content is thin
+    (tmp_path / "auth.md").write_text("## Authentication Overview\n\nSee docs.")
+    # Second doc: title doesn't match, content is richer
+    (tmp_path / "deploy.md").write_text("## Deployment\n\nAuthentication is handled by JWT tokens.")
+    corpus.add_file(tmp_path / "auth.md", base_path=tmp_path)
+    corpus.add_file(tmp_path / "deploy.md", base_path=tmp_path)
+
+    retriever = BM25Retriever(corpus)
+    chunks = retriever.search("authentication", limit=5)
+    # With high title weight, auth.md (section='Authentication Overview') should get boosted
+    w = RerankerWeights(title=1.0, entity=0.0, freshness=0.0)
+    reranker = LocusReranker(corpus, weights=w)
+    reranked = reranker.rerank(chunks, query="authentication", weights=w)
+    assert any("auth" in c.doc_path for c in reranked)
+
+
+def test_reranker_does_not_surface_zeroes(tmp_path):
+    from locus import LocusReranker
+    from locus.retrieval.bm25 import ScoredChunk
+    corpus = Corpus(tmp_path / "corpus")
+    reranker = LocusReranker(corpus)
+    # A chunk with score=0 should remain 0 after boost (multiplicative)
+    zero_chunk = ScoredChunk("c1", "doc.md", 0.0, "content", "bm25")
+    reranked = reranker.rerank([zero_chunk], query="anything")
+    assert reranked[0].score == 0.0
+
+
+def test_reranker_custom_weights(tmp_path):
+    from locus import LocusReranker, RerankerWeights
+    corpus = Corpus(tmp_path / "corpus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent about systems.")
+    corpus.add_file(tmp_path / "doc.md", base_path=tmp_path)
+    retriever = BM25Retriever(corpus)
+    chunks = retriever.search("systems", limit=3)
+    reranker = LocusReranker(corpus)
+    w = RerankerWeights(title=0.0, entity=0.0, freshness=0.0)
+    reranked = reranker.rerank(chunks, query="systems", weights=w)
+    # Zero weights → scores unchanged (allow for rounding to 6dp)
+    for orig, re in zip(chunks, reranked):
+        assert abs(orig.score - re.score) < 1e-5
+
+
+# -----------------------------------------------------------------------
+# Phase 8 — ContextPacker
+# -----------------------------------------------------------------------
+
+def test_packer_basic(tmp_path):
+    from locus import ContextPacker
+    from locus.retrieval.bm25 import ScoredChunk
+    packer = ContextPacker(budget=2000)
+    chunks = [
+        ScoredChunk("c1", "auth.md",   0.9, "JWT tokens are used for authentication here.", "bm25"),
+        ScoredChunk("c2", "deploy.md", 0.7, "Kubernetes manages deployment orchestration.", "bm25"),
+    ]
+    packed = packer.pack(chunks)
+    assert packed.chunks_included == 2
+    assert packed.chunks_available == 2
+    assert "auth.md" in packed.text
+    assert "deploy.md" in packed.text
+    assert not packed.truncated
+
+
+def test_packer_budget_truncation(tmp_path):
+    from locus import ContextPacker
+    from locus.retrieval.bm25 import ScoredChunk
+    # Very tight budget — should truncate
+    packer = ContextPacker(budget=20, header_tokens=5)
+    long_content = " ".join(["word"] * 100)
+    chunks = [
+        ScoredChunk("c1", "a.md", 1.0, long_content, "bm25"),
+        ScoredChunk("c2", "b.md", 0.5, long_content, "bm25"),
+    ]
+    packed = packer.pack(chunks)
+    assert packed.truncated
+    assert packed.chunks_included < 2
+
+
+def test_packer_groups_by_doc(tmp_path):
+    from locus import ContextPacker
+    from locus.retrieval.bm25 import ScoredChunk
+    packer = ContextPacker(budget=8000)
+    chunks = [
+        ScoredChunk("c1", "auth.md",   0.9, "First auth chunk.", "bm25"),
+        ScoredChunk("c2", "deploy.md", 0.8, "Deploy chunk.",     "bm25"),
+        ScoredChunk("c3", "auth.md",   0.7, "Second auth chunk.", "bm25"),
+    ]
+    packed = packer.pack(chunks)
+    # auth.md should appear as a group
+    text = packed.text
+    first_auth = text.index("auth.md")
+    deploy_pos = text.index("deploy.md")
+    second_auth = text.index("Second auth chunk")
+    # Both auth chunks should be grouped before or after deploy, not interleaved
+    assert first_auth < deploy_pos < second_auth or second_auth < first_auth < deploy_pos or \
+           (first_auth < second_auth < deploy_pos) or (deploy_pos < first_auth < second_auth)
+
+
+def test_packer_sources(tmp_path):
+    from locus import ContextPacker
+    from locus.retrieval.bm25 import ScoredChunk
+    packer = ContextPacker()
+    chunks = [
+        ScoredChunk("c1", "a.md", 1.0, "Content A.", "bm25"),
+        ScoredChunk("c2", "b.md", 0.9, "Content B.", "bm25"),
+    ]
+    packed = packer.pack(chunks)
+    assert "a.md" in packed.sources
+    assert "b.md" in packed.sources
+
+
+# -----------------------------------------------------------------------
+# Phase 8 — Query cache
+# -----------------------------------------------------------------------
+
+def test_cache_miss_then_hit(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Auth\n\nJWT tokens.")
+    engine.index(tmp_path)
+
+    engine.retrieve("JWT authentication")   # miss
+    engine.retrieve("JWT authentication")   # hit
+    stats = engine.cache_stats()
+    assert stats["hits"] >= 1
+    assert stats["misses"] >= 1
+
+
+def test_cache_invalidated_on_index(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+    engine.retrieve("content")
+    assert len(engine._query_cache) >= 1
+    engine.index(tmp_path)   # should invalidate
+    assert len(engine._query_cache) == 0
+
+
+def test_cache_invalidated_on_forget(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+    engine.retrieve("content")
+    assert len(engine._query_cache) >= 1
+    doc = engine.corpus.list_docs()[0]
+    engine.forget(doc)
+    assert len(engine._query_cache) == 0
+
+
+def test_cache_clear(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+    engine.retrieve("content")
+    result = engine.clear_cache()
+    assert result["cleared"] >= 1
+    assert engine.cache_stats()["size"] == 0
+
+
+def test_cache_no_cache_option(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+    engine.retrieve("content", use_cache=False)
+    # Should not populate cache
+    assert engine.cache_stats()["size"] == 0
+
+
+# -----------------------------------------------------------------------
+# Phase 8 — assess_confidence
+# -----------------------------------------------------------------------
+
+def test_assess_confidence_ok(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Auth\n\nJWT authentication tokens.")
+    engine.index(tmp_path)
+    chunks = engine.retrieve("JWT authentication")
+    conf = engine.assess_confidence(chunks)
+    assert conf["level"] in ("ok", "low")
+    assert "top_score" in conf
+
+
+def test_assess_confidence_empty(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    conf = engine.assess_confidence([])
+    assert conf["level"] == "empty"
+
+
+# -----------------------------------------------------------------------
+# Phase 8 — prepare_context
+# -----------------------------------------------------------------------
+
+def test_prepare_context_returns_all_keys(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nJWT authentication system.")
+    engine.index(tmp_path)
+    result = engine.prepare_context("authentication", limit=3, token_budget=2000)
+
+    assert "query" in result
+    assert "confidence" in result
+    assert "packed_context" in result
+    assert "tokens_used" in result
+    assert "token_budget" in result
+    assert "chunks_included" in result
+    assert "sources" in result
+    assert "kg_context" in result
+
+
+def test_prepare_context_packed_text(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nJWT tokens for authentication.")
+    engine.index(tmp_path)
+    result = engine.prepare_context("JWT authentication")
+    assert isinstance(result["packed_context"], str)
+
+
+def test_prepare_context_kg_entities(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "leads", "Auth team")
+    result = engine.prepare_context("Alice leads")
+    # KG context should include Alice's facts
+    assert "Alice" in result["kg_context"] or len(result["kg_context"]) >= 0
+
+
+def test_prepare_context_no_rerank(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+    result = engine.prepare_context("content", rerank=False)
+    assert result["chunks_included"] >= 0

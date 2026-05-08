@@ -5,8 +5,12 @@ from .eval import LocusEval
 from .bridge import OMPABridge
 from .doctor import LocusDoctor
 from .export import KGExporter
+from .retrieval.reranker import LocusReranker, RerankerWeights
+from .context.packer import ContextPacker, PackedContext
 
 __all__ = [
     "LocusEngine", "LocusCluster", "LocusWatcher", "LocusEval",
-    "OMPABridge", "LocusDoctor", "KGExporter", "__version__",
+    "OMPABridge", "LocusDoctor", "KGExporter",
+    "LocusReranker", "RerankerWeights", "ContextPacker", "PackedContext",
+    "__version__",
 ]

@@ -97,6 +97,16 @@ def main() -> None:
     p_bench.add_argument("qa_file", help="JSON file with [{query, expected_docs}] pairs")
     p_bench.add_argument("--k", default="1,3,5", help="Comma-separated K values")
 
+    p_prep = sub.add_parser("prepare-context", help="All-in-one: retrieve+rerank+pack+KG context")
+    p_prep.add_argument("query")
+    p_prep.add_argument("--limit",  type=int, default=5)
+    p_prep.add_argument("--budget", type=int, default=4000, help="Token budget")
+    p_prep.add_argument("--no-rerank", action="store_true")
+    p_prep.add_argument("--as-of", dest="as_of", default=None)
+
+    sub.add_parser("cache-stats", help="Query cache statistics")
+    sub.add_parser("cache-clear", help="Invalidate query cache")
+
     sub.add_parser("doctor", help="Health check: corpus, KG, bulletin, store size")
 
     p_export = sub.add_parser("export-kg", help="Export KG to GraphML / JSONL / DOT")
@@ -220,6 +230,21 @@ def main() -> None:
         )
         print(f"Watching {args.path}  (interval={args.interval}s)  Ctrl-C to stop")
         watcher.start(background=False)
+
+    elif args.cmd == "prepare-context":
+        print(json.dumps(engine.prepare_context(
+            args.query,
+            limit=args.limit,
+            token_budget=args.budget,
+            rerank=not args.no_rerank,
+            as_of=args.as_of,
+        ), indent=2))
+
+    elif args.cmd == "cache-stats":
+        print(json.dumps(engine.cache_stats(), indent=2))
+
+    elif args.cmd == "cache-clear":
+        print(json.dumps(engine.clear_cache(), indent=2))
 
     elif args.cmd == "doctor":
         from .doctor import LocusDoctor

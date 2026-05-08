@@ -153,6 +153,21 @@ def _call_tool(name: str, arguments: dict) -> dict:
         if name == "locus_suggest_aliases":
             return engine.suggest_aliases(threshold=float(arguments.get("threshold", 0.75)))
 
+        if name == "locus_prepare_context":
+            return engine.prepare_context(
+                query=arguments["query"],
+                limit=min(int(arguments.get("limit", 5)), 20),
+                token_budget=int(arguments.get("token_budget", 4000)),
+                rerank=bool(arguments.get("rerank", True)),
+                as_of=arguments.get("as_of"),
+            )
+
+        if name == "locus_cache_stats":
+            return engine.cache_stats()
+
+        if name == "locus_clear_cache":
+            return engine.clear_cache()
+
         if name == "locus_kg_traverse":
             return engine.kg_traverse(
                 start=arguments["start"],

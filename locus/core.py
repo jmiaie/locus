@@ -31,6 +31,8 @@ from .retrieval.link_walker import LinkWalker
 from .retrieval.structural import StructuralRetriever
 from .retrieval.recency import RecencyRetriever
 from .retrieval.link_popularity import LinkPopularityRetriever
+from .retrieval.reranker import LocusReranker, RerankerWeights
+from .context.packer import ContextPacker, PackedContext
 from .retrieval.fusion import rrf_fuse
 from .retrieval.classifier import classify_query, INTENT_WEIGHTS, QueryIntent
 from .context.bulletin import ContextBulletin
@@ -38,12 +40,14 @@ from .context.budget import ContextBudget
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 # Fixed weights appended after intent weights: [structural, recency]
 _STRUCTURAL_WEIGHT  = 1.0
 _RECENCY_WEIGHT     = 0.3
 _LINK_POP_WEIGHT    = 0.2
+
+_CACHE_MAX_SIZE     = 256
 
 
 class LocusEngine:
@@ -78,7 +82,14 @@ class LocusEngine:
         self._walker = LinkWalker(self.corpus)
         self._structural = StructuralRetriever(self.corpus)
         self._recency = RecencyRetriever(self.corpus)
-        self._link_pop = LinkPopularityRetriever(self.corpus)  # Phase 7
+        self._link_pop = LinkPopularityRetriever(self.corpus)
+        self._reranker = LocusReranker(self.corpus, kg=self.kg)  # Phase 8
+        self._packer = ContextPacker()                            # Phase 8
+
+        # Query result cache — invalidated on corpus changes
+        self._query_cache: dict[str, list[ScoredChunk]] = {}
+        self._cache_hits: int = 0
+        self._cache_misses: int = 0
 
     # ------------------------------------------------------------------
     # Indexing
@@ -103,6 +114,7 @@ class LocusEngine:
             if any(ex in f.parts for ex in {".locus", ".palace", ".git", ".obsidian"}):
                 continue
             triples += self.kg.populate_from_file(f, base_path=path)
+        self._invalidate_cache()
         return {
             "files": self.corpus.doc_count(),
             "chunks": chunks,
@@ -111,11 +123,13 @@ class LocusEngine:
 
     def forget(self, doc_path: str) -> dict:
         removed = self.corpus.remove_file(doc_path)
+        self._invalidate_cache()
         return {"removed_chunks": removed, "doc": doc_path}
 
     def sync(self, path: str | Path, pattern: str = "**/*.md") -> dict:
         for doc in self.corpus.list_docs():
             self.corpus.remove_file(doc)
+        self._invalidate_cache()
         return self.index(path, pattern=pattern)
 
     # ------------------------------------------------------------------
@@ -129,20 +143,28 @@ class LocusEngine:
         as_of: str = None,
         use_links: bool = True,
         intent: QueryIntent = None,
+        use_cache: bool = True,
     ) -> list[ScoredChunk]:
         """
-        Five-signal retrieval: BM25 + KG + link walk + structural + recency.
+        Six-signal retrieval: BM25 + KG + link walk + structural + recency + link popularity.
 
         Query intent auto-classified unless overridden:
           - KG-first:   entity/factual queries (e.g. "who is Alice?")
           - BM25-first: procedural/narrative (e.g. "how does auth work?")
           - Balanced:   default
 
-        Structural signal activates only when the query contains date,
-        tag, or doc-type references. Recency is always a soft prior.
+        Results are cached by (query, limit, as_of, use_links, intent) and
+        invalidated automatically on index/forget/sync.
         """
         if intent is None:
             intent = classify_query(query)
+
+        if use_cache:
+            key = self._cache_key(query, limit, as_of, use_links, intent.value)
+            if key in self._query_cache:
+                self._cache_hits += 1
+                return self._query_cache[key]
+            self._cache_misses += 1
 
         bm25_hits = self._bm25.search(query, limit=limit * 2)
         kg_hits = self._kg_ret.search(query, limit=limit * 2, as_of=as_of)
@@ -175,7 +197,125 @@ class LocusEngine:
         if check.status.value in ("critical", "warning", "trend"):
             logger.warning("Budget [%s]: %s", intent.value, check.message)
 
+        if use_cache:
+            if len(self._query_cache) >= _CACHE_MAX_SIZE:
+                oldest = next(iter(self._query_cache))
+                del self._query_cache[oldest]
+            self._query_cache[key] = fused
+
         return fused
+
+    # ------------------------------------------------------------------
+    # Phase 8 — rerank, pack, prepare, confidence, cache helpers
+    # ------------------------------------------------------------------
+
+    def rerank(
+        self,
+        chunks: list[ScoredChunk],
+        query: str,
+        weights: RerankerWeights | None = None,
+    ) -> list[ScoredChunk]:
+        """Apply heuristic re-ranking (title, entity density, freshness) after RRF."""
+        return self._reranker.rerank(chunks, query, weights=weights)
+
+    def pack_context(
+        self,
+        chunks: list[ScoredChunk],
+        token_budget: int = 4000,
+    ) -> PackedContext:
+        """Pack chunks into a token budget, grouped by document."""
+        return self._packer.pack(chunks, token_budget=token_budget)
+
+    def assess_confidence(self, chunks: list[ScoredChunk]) -> dict:
+        """
+        Assess how confident Locus is in these retrieval results.
+        Returns level ('ok' | 'low' | 'empty') and top RRF score.
+        """
+        if not chunks:
+            return {"level": "empty", "top_score": 0.0,
+                    "note": "No results — try indexing more documents"}
+        top = chunks[0].score
+        if top < 0.005:
+            return {"level": "low", "top_score": round(top, 6),
+                    "note": "Weak signal — results may not be relevant"}
+        return {"level": "ok", "top_score": round(top, 6)}
+
+    def prepare_context(
+        self,
+        query: str,
+        limit: int = 5,
+        token_budget: int = 4000,
+        rerank: bool = True,
+        as_of: str = None,
+    ) -> dict:
+        """
+        All-in-one context preparation for LLM agents:
+          retrieve → rerank → pack → assess_confidence → KG context
+
+        Returns everything needed to answer the query in a single call.
+        """
+        from .retrieval.kg_retrieval import extract_query_entities
+
+        chunks = self.retrieve(query, limit=limit, as_of=as_of)
+        if rerank and chunks:
+            chunks = self.rerank(chunks, query)
+
+        packed = self.pack_context(chunks, token_budget=token_budget)
+        confidence = self.assess_confidence(chunks)
+
+        # KG facts for entities detected in the query
+        entities = extract_query_entities(query)
+        kg_context: dict[str, list[str]] = {}
+        for entity in entities[:5]:
+            triples = self.kg.query_entity(entity, as_of=as_of)
+            if triples:
+                kg_context[entity] = [
+                    f"{t.subject} --{t.predicate}--> {t.object}"
+                    for t in triples[:10]
+                ]
+
+        return {
+            "query": query,
+            "confidence": confidence,
+            "packed_context": packed.text,
+            "tokens_used": packed.tokens_used,
+            "token_budget": packed.token_budget,
+            "chunks_included": packed.chunks_included,
+            "truncated": packed.truncated,
+            "sources": packed.sources,
+            "kg_context": kg_context,
+        }
+
+    # ------------------------------------------------------------------
+    # Cache management (Phase 8)
+    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+
+    def _cache_key(self, query: str, limit: int, as_of: str | None,
+                   use_links: bool, intent_val: str) -> str:
+        import hashlib
+        raw = f"{query}|{limit}|{as_of}|{use_links}|{intent_val}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:20]
+
+    def _invalidate_cache(self) -> None:
+        self._query_cache.clear()
+
+    def cache_stats(self) -> dict:
+        total = self._cache_hits + self._cache_misses
+        return {
+            "size": len(self._query_cache),
+            "max_size": _CACHE_MAX_SIZE,
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "hit_rate": round(self._cache_hits / total, 3) if total else 0.0,
+        }
+
+    def clear_cache(self) -> dict:
+        size = len(self._query_cache)
+        self._invalidate_cache()
+        self._cache_hits = 0
+        self._cache_misses = 0
+        return {"cleared": size}
 
     def format_context(
         self, chunks: list[ScoredChunk], include_hot: bool = True

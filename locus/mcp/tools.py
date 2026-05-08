@@ -207,6 +207,43 @@ TOOLS: dict[str, dict] = {
     # Phase 6 — Watch, Bridge, Eval
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
+    # Phase 8 — Re-ranking, context packing, cache, prepare_context
+    # ------------------------------------------------------------------
+    "locus_prepare_context": {
+        "description": (
+            "All-in-one context preparation for LLM agents. "
+            "Retrieves → re-ranks → packs into token budget → assesses confidence → "
+            "adds KG facts for query entities. Single call returns everything needed "
+            "to answer the query. Recommended primary tool for agent workflows."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query":        {"type": "string"},
+                "limit":        {"type": "integer", "default": 5},
+                "token_budget": {"type": "integer", "default": 4000, "description": "Max tokens for packed_context."},
+                "rerank":       {"type": "boolean", "default": True, "description": "Apply heuristic re-ranking after RRF."},
+                "as_of":        {"type": "string", "description": "Temporal filter YYYY-MM-DD."},
+                "store_path":   {"type": "string", "default": ".locus"},
+            },
+            "required": ["query"],
+        },
+    },
+    "locus_cache_stats": {
+        "description": "Query cache statistics: size, hit rate, hits, misses.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"store_path": {"type": "string", "default": ".locus"}},
+        },
+    },
+    "locus_clear_cache": {
+        "description": "Manually invalidate the query result cache.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"store_path": {"type": "string", "default": ".locus"}},
+        },
+    },
+    # ------------------------------------------------------------------
     # Phase 7 — KG traversal, doctor, export
     # ------------------------------------------------------------------
     "locus_kg_traverse": {

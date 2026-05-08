@@ -1,4 +1,5 @@
 from .bm25 import BM25Retriever, ScoredChunk
+from .reranker import LocusReranker, RerankerWeights
 from .kg_retrieval import KGRetriever
 from .link_walker import LinkWalker
 from .structural import StructuralRetriever
@@ -8,7 +9,7 @@ from .fusion import rrf_fuse
 from .classifier import QueryIntent, classify_query, INTENT_WEIGHTS
 
 __all__ = [
-    "BM25Retriever", "ScoredChunk",
+    "BM25Retriever", "ScoredChunk", "LocusReranker", "RerankerWeights",
     "KGRetriever", "LinkWalker",
     "StructuralRetriever", "RecencyRetriever", "LinkPopularityRetriever",
     "rrf_fuse",
