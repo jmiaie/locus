@@ -1,7 +1,11 @@
 """
 Locus MCP Server — Vectorless RAG as Model Context Protocol tools.
-JSON-RPC over stdin/stdout. Compatible with Claude Desktop, Cursor, Windsurf,
-and any MCP-compatible client.
+JSON-RPC over stdin/stdout. Compatible with Claude Desktop, Cursor, Windsurf.
+
+Capabilities:
+  tools     — 20 RAG + KG + cluster tools
+  resources — indexed documents browsable as locus://doc/{path}
+  prompts   — 4 pre-built prompt templates with live context injection
 
 Usage:
     claude mcp add locus -- py -3 -m locus.mcp.server --store /path/to/.locus
@@ -15,17 +19,27 @@ import sys
 
 from ..core import LocusEngine, __version__
 from .tools import TOOLS
+from .prompts import list_prompts, render_prompt
 
 logger = logging.getLogger(__name__)
 
-_engine: LocusEngine | None = None
+# Per-store engine cache
+_engines: dict[str, LocusEngine] = {}
+# Per-registry cluster cache
+_clusters: dict[str, object] = {}   # LocusCluster, typed as object to avoid import cycle
 
 
 def _get_engine(store_path: str = ".locus") -> LocusEngine:
-    global _engine
-    if _engine is None or str(_engine.store_path) != str(store_path):
-        _engine = LocusEngine(store_path=store_path)
-    return _engine
+    if store_path not in _engines:
+        _engines[store_path] = LocusEngine(store_path=store_path)
+    return _engines[store_path]
+
+
+def _get_cluster(cluster_path: str):
+    if cluster_path not in _clusters:
+        from ..cluster import LocusCluster
+        _clusters[cluster_path] = LocusCluster(registry_path=cluster_path)
+    return _clusters[cluster_path]
 
 
 def _list_tools() -> dict:
@@ -46,10 +60,13 @@ def _call_tool(name: str, arguments: dict) -> dict:
         return {"error": f"Unknown tool: {name}"}
 
     try:
+        # Cluster tools — separate code path
+        if name in ("locus_cluster_retrieve", "locus_add_node", "locus_remove_node", "locus_list_nodes"):
+            return _handle_cluster_tool(name, arguments)
+
         store_path = str(arguments.get("store_path", ".locus"))
         if ".." in store_path:
             return {"error": "Invalid store_path"}
-
         engine = _get_engine(store_path)
 
         if name == "locus_index":
@@ -82,6 +99,12 @@ def _call_tool(name: str, arguments: dict) -> dict:
                 ],
             }
 
+        if name == "locus_explain":
+            return engine.explain(
+                chunk_id=arguments["chunk_id"],
+                query=arguments.get("query"),
+            )
+
         if name == "locus_add_fact":
             return engine.add_fact(
                 subject=arguments["subject"],
@@ -93,10 +116,7 @@ def _call_tool(name: str, arguments: dict) -> dict:
             )
 
         if name == "locus_query_entity":
-            return engine.query_entity(
-                entity=arguments["entity"],
-                as_of=arguments.get("as_of"),
-            )
+            return engine.query_entity(arguments["entity"], as_of=arguments.get("as_of"))
 
         if name == "locus_hot_context":
             hot = engine.bulletin.inject(token_limit=int(arguments.get("token_limit", 1500)))
@@ -128,15 +148,10 @@ def _call_tool(name: str, arguments: dict) -> dict:
             return engine.find_contradictions(entity=arguments.get("entity"))
 
         if name == "locus_add_alias":
-            return engine.add_alias(
-                alias=arguments["alias"],
-                canonical=arguments["canonical"],
-            )
+            return engine.add_alias(arguments["alias"], arguments["canonical"])
 
         if name == "locus_suggest_aliases":
-            return engine.suggest_aliases(
-                threshold=float(arguments.get("threshold", 0.75))
-            )
+            return engine.suggest_aliases(threshold=float(arguments.get("threshold", 0.75)))
 
         return {"error": f"Unhandled tool: {name}"}
 
@@ -147,14 +162,89 @@ def _call_tool(name: str, arguments: dict) -> dict:
         return {"error": type(e).__name__}
 
 
+def _handle_cluster_tool(name: str, arguments: dict) -> dict:
+    cluster_path = arguments.get("cluster_path", "")
+    if not cluster_path or ".." in cluster_path:
+        return {"error": "Invalid cluster_path"}
+    cluster = _get_cluster(cluster_path)
+
+    if name == "locus_cluster_retrieve":
+        chunks = cluster.retrieve(
+            query=arguments["query"],
+            limit=min(int(arguments.get("limit", 5)), 20),
+            nodes=arguments.get("nodes"),
+            as_of=arguments.get("as_of"),
+        )
+        return {
+            "results": [
+                {
+                    "chunk_id": c.chunk_id,
+                    "doc_path": c.doc_path,
+                    "score": round(c.score, 4),
+                    "provenance": c.provenance,
+                    "content": c.content[:600],
+                }
+                for c in chunks
+            ]
+        }
+
+    if name == "locus_add_node":
+        return cluster.add_node(arguments["name"], arguments["store_path"])
+
+    if name == "locus_remove_node":
+        return cluster.remove_node(arguments["name"])
+
+    if name == "locus_list_nodes":
+        return {"nodes": cluster.list_nodes()}
+
+    return {"error": f"Unhandled cluster tool: {name}"}
+
+
+# ------------------------------------------------------------------
+# MCP Resources
+# ------------------------------------------------------------------
+
+def _handle_resources_list(engine: LocusEngine) -> dict:
+    return {
+        "resources": [
+            {
+                "uri": f"locus://doc/{doc_path}",
+                "name": doc_path,
+                "mimeType": "text/markdown",
+                "description": f"Indexed document: {doc_path}",
+            }
+            for doc_path in engine.corpus.list_docs()
+        ]
+    }
+
+
+def _handle_resources_read(uri: str, engine: LocusEngine) -> dict:
+    if not uri.startswith("locus://doc/"):
+        return {"error": f"Unknown URI scheme: {uri}"}
+    doc_path = uri[len("locus://doc/"):]
+    chunks = engine.corpus.get_chunks_for_doc(doc_path)
+    if not chunks:
+        return {"error": f"Document not found: {doc_path}"}
+    content = "\n\n---\n\n".join(c.content for c in chunks)
+    return {
+        "contents": [
+            {"uri": uri, "mimeType": "text/markdown", "text": content}
+        ]
+    }
+
+
+# ------------------------------------------------------------------
+# MCP Protocol
+# ------------------------------------------------------------------
+
 def _send(response: dict) -> None:
     sys.stdout.write(json.dumps(response) + "\n")
     sys.stdout.flush()
 
 
 def main(store_path: str = ".locus") -> None:
-    global _engine
-    _engine = LocusEngine(store_path=store_path)
+    # Pre-warm the default engine
+    _engines[store_path] = LocusEngine(store_path=store_path)
 
     request: dict | None = None
     while True:
@@ -164,25 +254,33 @@ def main(store_path: str = ".locus") -> None:
                 break
 
             request = json.loads(line.strip())
-            method = request.get("method", "")
-            req_id = request.get("id")
+            method  = request.get("method", "")
+            req_id  = request.get("id")
+            params  = request.get("params", {})
 
+            # Core MCP lifecycle
             if method == "initialize":
                 _send({
                     "jsonrpc": "2.0",
                     "id": req_id,
                     "result": {
                         "protocolVersion": "2024-11-05",
-                        "capabilities": {"tools": {}},
+                        "capabilities": {
+                            "tools":     {},
+                            "resources": {},
+                            "prompts":   {},
+                        },
                         "serverInfo": {"name": "locus", "version": __version__},
                     },
                 })
+
             elif method == "tools/list":
                 _send({"jsonrpc": "2.0", "id": req_id, "result": _list_tools()})
+
             elif method == "tools/call":
                 result = _call_tool(
-                    name=request["params"]["name"],
-                    arguments=request["params"].get("arguments", {}),
+                    name=params["name"],
+                    arguments=params.get("arguments", {}),
                 )
                 _send({
                     "jsonrpc": "2.0",
@@ -191,8 +289,44 @@ def main(store_path: str = ".locus") -> None:
                         "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
                     },
                 })
+
+            # Resources
+            elif method == "resources/list":
+                sp = params.get("store_path", store_path)
+                engine = _get_engine(sp)
+                _send({"jsonrpc": "2.0", "id": req_id, "result": _handle_resources_list(engine)})
+
+            elif method == "resources/read":
+                sp = params.get("store_path", store_path)
+                engine = _get_engine(sp)
+                result = _handle_resources_read(params.get("uri", ""), engine)
+                _send({"jsonrpc": "2.0", "id": req_id, "result": result})
+
+            # Prompts
+            elif method == "prompts/list":
+                _send({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"prompts": list_prompts()},
+                })
+
+            elif method == "prompts/get":
+                sp = params.get("store_path", store_path)
+                engine = _get_engine(sp)
+                messages = render_prompt(
+                    name=params.get("name", ""),
+                    args=params.get("arguments", {}),
+                    engine=engine,
+                )
+                _send({
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {"messages": messages},
+                })
+
             elif method in ("notifications/initialized",):
                 pass
+
             elif method in ("shutdown", "exit"):
                 break
 

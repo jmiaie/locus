@@ -37,7 +37,7 @@ from .context.budget import ContextBudget
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 # Fixed weights appended after intent weights: [structural, recency]
 _STRUCTURAL_WEIGHT = 1.0
@@ -267,6 +267,117 @@ class LocusEngine:
     # ------------------------------------------------------------------
     # Session lifecycle
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Phase 4 — Explainability
+    # ------------------------------------------------------------------
+
+    def explain(self, chunk_id: str, query: str = None) -> dict:
+        """
+        Explain why a chunk was (or would be) retrieved for a query.
+
+        For each active retrieval signal (BM25, KG, Structural) the method
+        checks whether this chunk would have been returned and reports the
+        specific terms, entities, or metadata that caused it.  A plain-
+        English narrative is assembled and returned alongside the raw data.
+
+        Works with any chunk_id regardless of whether it came from a prior
+        retrieve() call.
+        """
+        from .memory.corpus import tokenize
+        from .retrieval.kg_retrieval import extract_query_entities
+        from .retrieval.structural import (
+            _extract_date_range, _extract_tags, _extract_type,
+            _date_in_range, _tag_overlap,
+        )
+
+        chunk = self.corpus.get_chunk(chunk_id)
+        if not chunk:
+            return {"error": f"Chunk not found: {chunk_id}"}
+
+        fm = chunk.metadata.get("frontmatter", {})
+        result: dict = {
+            "chunk_id": chunk_id,
+            "doc_path": chunk.doc_path,
+            "section": chunk.metadata.get("section", ""),
+            "content_preview": chunk.content[:300],
+            "entities_in_chunk": chunk.metadata.get("entities", []),
+            "links_in_chunk": chunk.metadata.get("links", []),
+            "frontmatter": fm,
+        }
+
+        signals: list[str] = []
+
+        if query:
+            # BM25 — which query terms appear in this chunk?
+            terms = tokenize(query)
+            matched = [t for t in terms if chunk_id in self.corpus.get_posting_list(t)]
+            if matched:
+                result["bm25_matched_terms"] = matched
+                signals.append(f"BM25: terms [{', '.join(matched)}] appear in this chunk")
+
+            # KG — which query entities link to this document?
+            query_entities = extract_query_entities(query)
+            kg_hits: list[str] = []
+            for entity in query_entities[:8]:
+                if chunk.doc_path in self.kg.sources_for_entity(entity):
+                    kg_hits.append(entity)
+            if kg_hits:
+                result["kg_matched_entities"] = kg_hits
+                signals.append(
+                    f"KG: entities [{', '.join(kg_hits)}] link to this document"
+                )
+
+            # Structural — does frontmatter match date/tag/type signals?
+            structural: list[str] = []
+            dr = _extract_date_range(query)
+            if dr and _date_in_range(fm.get("date", ""), *dr):
+                structural.append(f"date {fm['date']} in range {dr[0]}–{dr[1]}")
+            qt = _extract_tags(query)
+            if qt and _tag_overlap(fm.get("tags", ""), qt) > 0:
+                structural.append(f"tags matched: {qt}")
+            qtype = _extract_type(query)
+            if qtype:
+                doc_type = fm.get("type", fm.get("category", "")).lower()
+                if qtype in doc_type or doc_type in qtype:
+                    structural.append(f"type '{doc_type}' matches query type '{qtype}'")
+            if structural:
+                result["structural_matches"] = structural
+                signals.append(f"Structural: {'; '.join(structural)}")
+
+        # KG context — facts about entities mentioned in this chunk
+        kg_context: list[dict] = []
+        for entity in chunk.metadata.get("entities", [])[:5]:
+            triples = self.kg.query_entity(entity)
+            if triples:
+                t0 = triples[0]
+                kg_context.append({
+                    "entity": entity,
+                    "fact_count": len(triples),
+                    "sample_fact": f"{t0.subject} --{t0.predicate}--> {t0.object}",
+                })
+        result["kg_context"] = kg_context
+
+        # Plain-English narrative
+        head = f"Chunk from '{chunk.doc_path}'"
+        if chunk.metadata.get("section"):
+            head += f" (section: '{chunk.metadata['section']}')"
+        narrative_parts = [head]
+        if signals:
+            narrative_parts.append("Retrieved because: " + "; ".join(signals))
+        else:
+            narrative_parts.append(
+                "No query provided — cannot explain retrieval signals"
+                if not query
+                else "No retrieval signals matched for this query"
+            )
+        if kg_context:
+            names = [k["entity"] for k in kg_context[:3]]
+            narrative_parts.append(
+                f"Contains {len(kg_context)} entity/entities with KG facts: {', '.join(names)}"
+            )
+        result["narrative"] = ". ".join(narrative_parts) + "."
+        return result
 
     def session_start(self) -> dict:
         return {

@@ -1047,3 +1047,305 @@ def test_engine_session_start_includes_resolver(tmp_path):
     engine = LocusEngine(store_path=tmp_path / ".locus")
     start = engine.session_start()
     assert "resolver" in start
+
+
+# -----------------------------------------------------------------------
+# Phase 4 — locus_explain
+# -----------------------------------------------------------------------
+
+def test_explain_without_query(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    f = tmp_path / "auth.md"
+    f.write_text("## JWT Auth\n\nJWT tokens are validated on every request.")
+    engine.index(tmp_path)
+    chunk_id = engine.corpus.get_chunks_for_doc("auth.md")[0].id
+
+    result = engine.explain(chunk_id)
+    assert result["doc_path"] == "auth.md"
+    assert "narrative" in result
+    assert "content_preview" in result
+    assert "chunk_id" in result
+
+
+def test_explain_with_query_bm25(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    f = tmp_path / "auth.md"
+    f.write_text("## Authentication\n\nJWT tokens are validated for authentication.")
+    engine.index(tmp_path)
+    chunk_id = engine.corpus.get_chunks_for_doc("auth.md")[0].id
+
+    result = engine.explain(chunk_id, query="JWT authentication")
+    assert "bm25_matched_terms" in result
+    assert "jwt" in result["bm25_matched_terms"] or "authentication" in result["bm25_matched_terms"]
+    assert "narrative" in result
+    assert "Retrieved because" in result["narrative"]
+
+
+def test_explain_with_kg_context(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    f = tmp_path / "doc.md"
+    f.write_text("Alice leads the Platform team.")
+    engine.index(tmp_path)
+    engine.add_fact("Alice", "leads", "Platform", source="doc.md")
+    chunk_id = engine.corpus.get_chunks_for_doc("doc.md")[0].id
+
+    result = engine.explain(chunk_id, query="Alice")
+    assert len(result["kg_context"]) >= 1
+    assert result["kg_context"][0]["entity"] == "Alice"
+
+
+def test_explain_unknown_chunk(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    result = engine.explain("nonexistent_chunk_id")
+    assert "error" in result
+
+
+def test_explain_structural_match(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    f = tmp_path / "q1.md"
+    f.write_text("---\ndate: 2025-02-10\ntags: planning\n---\n## Q1 Planning\n\nBudget review.")
+    engine.index(tmp_path)
+    chunk_id = engine.corpus.get_chunks_for_doc("q1.md")[0].id
+
+    result = engine.explain(chunk_id, query="Q1 2025 planning")
+    assert "structural_matches" in result
+    assert len(result["structural_matches"]) >= 1
+
+
+# -----------------------------------------------------------------------
+# Phase 4 — MCP Resources
+# -----------------------------------------------------------------------
+
+def test_mcp_resources_list(tmp_path):
+    from locus.mcp.server import _handle_resources_list
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Topic\n\nContent here.")
+    engine.index(tmp_path)
+
+    result = _handle_resources_list(engine)
+    assert "resources" in result
+    assert len(result["resources"]) == 1
+    assert result["resources"][0]["uri"] == "locus://doc/doc.md"
+    assert result["resources"][0]["mimeType"] == "text/markdown"
+
+
+def test_mcp_resources_read(tmp_path):
+    from locus.mcp.server import _handle_resources_read
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Topic\n\nContent to read back.")
+    engine.index(tmp_path)
+
+    result = _handle_resources_read("locus://doc/doc.md", engine)
+    assert "contents" in result
+    assert len(result["contents"]) == 1
+    assert "Content to read back" in result["contents"][0]["text"]
+
+
+def test_mcp_resources_read_unknown(tmp_path):
+    from locus.mcp.server import _handle_resources_read
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    result = _handle_resources_read("locus://doc/nonexistent.md", engine)
+    assert "error" in result
+
+
+def test_mcp_resources_bad_scheme(tmp_path):
+    from locus.mcp.server import _handle_resources_read
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    result = _handle_resources_read("http://example.com", engine)
+    assert "error" in result
+
+
+# -----------------------------------------------------------------------
+# Phase 4 — MCP Prompts
+# -----------------------------------------------------------------------
+
+def test_prompts_list():
+    from locus.mcp.prompts import list_prompts
+    prompts = list_prompts()
+    assert len(prompts) == 4
+    names = {p["name"] for p in prompts}
+    assert "locus_research" in names
+    assert "locus_entity_summary" in names
+    assert "locus_timeline" in names
+    assert "locus_contradiction_analysis" in names
+
+
+def test_prompt_research_renders(tmp_path):
+    from locus.mcp.prompts import render_prompt
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nJWT authentication system design.")
+    engine.index(tmp_path)
+
+    messages = render_prompt("locus_research", {"topic": "authentication"}, engine)
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert "authentication" in messages[0]["content"]["text"].lower()
+
+
+def test_prompt_entity_summary_renders(tmp_path):
+    from locus.mcp.prompts import render_prompt
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "leads", "Platform", source="org.md")
+
+    messages = render_prompt("locus_entity_summary", {"entity": "Alice"}, engine)
+    assert len(messages) == 1
+    text = messages[0]["content"]["text"]
+    assert "Alice" in text
+    assert "leads" in text
+
+
+def test_prompt_contradiction_no_conflicts(tmp_path):
+    from locus.mcp.prompts import render_prompt
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    messages = render_prompt("locus_contradiction_analysis", {}, engine)
+    text = messages[0]["content"]["text"]
+    assert "No contradictions" in text or "consistent" in text
+
+
+def test_prompt_contradiction_with_conflicts(tmp_path):
+    from locus.mcp.prompts import render_prompt
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "role", "Engineer")
+    engine.add_fact("Alice", "role", "Manager")
+    messages = render_prompt("locus_contradiction_analysis", {"entity": "Alice"}, engine)
+    text = messages[0]["content"]["text"]
+    assert "contradiction" in text.lower() or "conflict" in text.lower()
+
+
+def test_prompt_timeline_renders(tmp_path):
+    from locus.mcp.prompts import render_prompt
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "role", "Engineer", valid_from="2020-01-01", valid_to="2022-12-31")
+    engine.add_fact("Alice", "role", "Manager",  valid_from="2023-01-01")
+
+    messages = render_prompt(
+        "locus_timeline",
+        {"entity": "Alice", "date_from": "2019-01-01", "date_to": "2024-01-01"},
+        engine,
+    )
+    text = messages[0]["content"]["text"]
+    assert "Alice" in text
+    assert "Engineer" in text or "Manager" in text
+
+
+def test_prompt_unknown_returns_error_message(tmp_path):
+    from locus.mcp.prompts import render_prompt
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    messages = render_prompt("nonexistent_prompt", {}, engine)
+    assert "Unknown prompt" in messages[0]["content"]["text"]
+
+
+# -----------------------------------------------------------------------
+# Phase 5 — LocusCluster
+# -----------------------------------------------------------------------
+
+def test_cluster_add_and_list(tmp_path):
+    from locus import LocusCluster
+    registry = tmp_path / "cluster.json"
+    cluster = LocusCluster(registry_path=registry)
+
+    cluster.add_node("node_a", str(tmp_path / ".locus_a"))
+    cluster.add_node("node_b", str(tmp_path / ".locus_b"))
+
+    assert set(cluster.node_names()) == {"node_a", "node_b"}
+    nodes = cluster.list_nodes()
+    assert len(nodes) == 2
+    assert all("name" in n for n in nodes)
+
+
+def test_cluster_persist_registry(tmp_path):
+    from locus import LocusCluster
+    registry = tmp_path / "cluster.json"
+
+    c1 = LocusCluster(registry_path=registry)
+    c1.add_node("jarv", str(tmp_path / ".locus_jarv"))
+
+    c2 = LocusCluster(registry_path=registry)
+    assert "jarv" in c2.node_names()
+
+
+def test_cluster_remove_node(tmp_path):
+    from locus import LocusCluster
+    registry = tmp_path / "cluster.json"
+    cluster = LocusCluster(registry_path=registry)
+    cluster.add_node("temp", str(tmp_path / ".locus_temp"))
+    result = cluster.remove_node("temp")
+    assert result["removed"] == "temp"
+    assert "temp" not in cluster.node_names()
+
+
+def test_cluster_remove_nonexistent(tmp_path):
+    from locus import LocusCluster
+    cluster = LocusCluster(registry_path=tmp_path / "cluster.json")
+    result = cluster.remove_node("ghost")
+    assert "error" in result
+
+
+def test_cluster_retrieve_empty(tmp_path):
+    from locus import LocusCluster
+    cluster = LocusCluster(registry_path=tmp_path / "cluster.json")
+    results = cluster.retrieve("anything")
+    assert results == []
+
+
+def test_cluster_retrieve_single_node(tmp_path):
+    from locus import LocusCluster
+    registry = tmp_path / "cluster.json"
+    cluster = LocusCluster(registry_path=registry)
+    store = tmp_path / ".locus_a"
+    cluster.add_node("node_a", str(store))
+
+    doc_dir = tmp_path / "docs"
+    doc_dir.mkdir()
+    (doc_dir / "auth.md").write_text("# Authentication\n\nJWT tokens for auth.")
+    cluster.get_node("node_a").index(str(doc_dir))
+
+    results = cluster.retrieve("authentication", limit=3)
+    assert len(results) > 0
+    assert all(c.provenance.startswith("node_a:") for c in results)
+
+
+def test_cluster_retrieve_multi_node(tmp_path):
+    from locus import LocusCluster
+    registry = tmp_path / "cluster.json"
+    cluster = LocusCluster(registry_path=registry)
+
+    for name in ("node_a", "node_b"):
+        store = tmp_path / f".locus_{name}"
+        cluster.add_node(name, str(store))
+        doc_dir = tmp_path / f"docs_{name}"
+        doc_dir.mkdir()
+        (doc_dir / "doc.md").write_text(f"# {name}\n\nContent from {name} about systems.")
+        cluster.get_node(name).index(str(doc_dir))
+
+    results = cluster.retrieve("systems", limit=5)
+    assert len(results) > 0
+    # Both nodes should contribute
+    node_prefixes = {c.provenance.split(":")[0] for c in results}
+    assert len(node_prefixes) == 2
+
+
+def test_cluster_retrieve_subset_nodes(tmp_path):
+    from locus import LocusCluster
+    registry = tmp_path / "cluster.json"
+    cluster = LocusCluster(registry_path=registry)
+
+    for name in ("node_a", "node_b", "node_c"):
+        store = tmp_path / f".locus_{name}"
+        cluster.add_node(name, str(store))
+
+    results = cluster.retrieve("query", nodes=["node_a"], limit=3)
+    for c in results:
+        assert c.provenance.startswith("node_a:")
+
+
+def test_cluster_status(tmp_path):
+    from locus import LocusCluster
+    registry = tmp_path / "cluster.json"
+    cluster = LocusCluster(registry_path=registry)
+    cluster.add_node("n1", str(tmp_path / ".locus_n1"))
+
+    status = cluster.status()
+    assert status["node_count"] == 1
+    assert "nodes" in status
+    assert "n1" in status["nodes"]

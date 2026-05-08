@@ -1,18 +1,21 @@
 """
-Locus MCP tool definitions — 15 tools for vectorless RAG over MCP.
+Locus MCP tool definitions — 20 tools for vectorless RAG over MCP.
 """
 
 TOOLS: dict[str, dict] = {
+    # ------------------------------------------------------------------
+    # Core RAG
+    # ------------------------------------------------------------------
     "locus_index": {
         "description": (
-            "Index a file or directory into Locus. Builds the BM25 inverted index, "
+            "Index a file or directory into Locus. Builds BM25 inverted index, "
             "extracts KG triples from wikilinks, tags, and prose sentences. "
-            "Skips unchanged files automatically (checksum dedup). Run this first."
+            "Skips unchanged files (checksum dedup). Run this first."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "File or directory path to index."},
+                "path": {"type": "string"},
                 "pattern": {"type": "string", "default": "**/*.md"},
                 "store_path": {"type": "string", "default": ".locus"},
             },
@@ -23,25 +26,44 @@ TOOLS: dict[str, dict] = {
         "description": (
             "Five-signal retrieval: BM25 + KG entity expansion + link walking + "
             "frontmatter structural matching + recency prior, fused via weighted RRF. "
-            "Query intent is auto-classified (KG-first / BM25-first / balanced). "
-            "Each result carries a provenance tag explaining why it was returned."
+            "Each result carries a provenance tag (bm25 / kg / link:hopN / structural / recency)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
                 "limit": {"type": "integer", "default": 5},
-                "as_of": {"type": "string", "description": "Temporal filter (YYYY-MM-DD)."},
+                "as_of": {"type": "string", "description": "Temporal filter YYYY-MM-DD."},
                 "use_links": {"type": "boolean", "default": True},
-                "full_content": {"type": "boolean", "default": False, "description": "Return full chunk text instead of truncating at 600 chars."},
-                "intent": {"type": "string", "enum": ["kg_first", "bm25_first", "balanced"], "description": "Override auto-detected query intent."},
+                "full_content": {"type": "boolean", "default": False},
+                "intent": {"type": "string", "enum": ["kg_first", "bm25_first", "balanced"]},
                 "store_path": {"type": "string", "default": ".locus"},
             },
             "required": ["query"],
         },
     },
+    "locus_explain": {
+        "description": (
+            "Explain WHY a chunk was (or would be) retrieved for a query. "
+            "Reports which BM25 terms matched, which KG entities link to the document, "
+            "and which structural signals fired. Returns a plain-English narrative. "
+            "Unique to graph-based RAG — impossible with vector search."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "chunk_id": {"type": "string", "description": "Chunk ID from a prior locus_retrieve call."},
+                "query": {"type": "string", "description": "The query to explain against (optional but recommended)."},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["chunk_id"],
+        },
+    },
+    # ------------------------------------------------------------------
+    # Knowledge Graph
+    # ------------------------------------------------------------------
     "locus_add_fact": {
-        "description": "Add a temporal fact (subject–predicate–object) to the knowledge graph.",
+        "description": "Add a temporal fact (subject–predicate–object) to the KG.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -57,7 +79,7 @@ TOOLS: dict[str, dict] = {
         },
     },
     "locus_query_entity": {
-        "description": "Query all KG facts about an entity. Supports temporal filter via as_of.",
+        "description": "Query all KG facts about an entity. Supports as_of temporal filter.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -68,6 +90,51 @@ TOOLS: dict[str, dict] = {
             "required": ["entity"],
         },
     },
+    "locus_kg_stats": {
+        "description": "Knowledge graph statistics.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"store_path": {"type": "string", "default": ".locus"}},
+        },
+    },
+    "locus_contradictions": {
+        "description": (
+            "Find contradicting KG triples: same subject+predicate, different objects, "
+            "overlapping validity windows."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity": {"type": "string", "description": "Optional entity to scope."},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+        },
+    },
+    "locus_add_alias": {
+        "description": "Register an entity alias so variant names resolve to the same canonical entity.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "alias": {"type": "string"},
+                "canonical": {"type": "string"},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["alias", "canonical"],
+        },
+    },
+    "locus_suggest_aliases": {
+        "description": "Suggest entity name pairs that may refer to the same entity (similarity-based).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "threshold": {"type": "number", "default": 0.75},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+        },
+    },
+    # ------------------------------------------------------------------
+    # Bulletin / session
+    # ------------------------------------------------------------------
     "locus_hot_context": {
         "description": "Return the hot-tier bulletin board — frequently retrieved and pinned context.",
         "input_schema": {
@@ -93,31 +160,28 @@ TOOLS: dict[str, dict] = {
         "description": "Warm context open: corpus + KG + bulletin + resolver stats, hot-tier content.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "store_path": {"type": "string", "default": ".locus"},
-            },
+            "properties": {"store_path": {"type": "string", "default": ".locus"}},
         },
     },
     "locus_wrap_up": {
         "description": "Session close: tick bulletin decay, return summary stats.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "store_path": {"type": "string", "default": ".locus"},
-            },
+            "properties": {"store_path": {"type": "string", "default": ".locus"}},
         },
     },
+    # ------------------------------------------------------------------
+    # Corpus management
+    # ------------------------------------------------------------------
     "locus_status": {
-        "description": "Full status: corpus, KG, bulletin, budget, entity resolver.",
+        "description": "Full status: corpus, KG, bulletin, budget, resolver.",
         "input_schema": {
             "type": "object",
-            "properties": {
-                "store_path": {"type": "string", "default": ".locus"},
-            },
+            "properties": {"store_path": {"type": "string", "default": ".locus"}},
         },
     },
     "locus_forget": {
-        "description": "Remove a document from the Locus corpus.",
+        "description": "Remove a document from the corpus.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -125,15 +189,6 @@ TOOLS: dict[str, dict] = {
                 "store_path": {"type": "string", "default": ".locus"},
             },
             "required": ["doc_path"],
-        },
-    },
-    "locus_kg_stats": {
-        "description": "Knowledge graph statistics.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "store_path": {"type": "string", "default": ".locus"},
-            },
         },
     },
     "locus_sync": {
@@ -148,45 +203,58 @@ TOOLS: dict[str, dict] = {
             "required": ["path"],
         },
     },
-    "locus_contradictions": {
+    # ------------------------------------------------------------------
+    # Phase 5 — Cluster (multi-node)
+    # ------------------------------------------------------------------
+    "locus_cluster_retrieve": {
         "description": (
-            "Find contradicting KG triples: same subject+predicate, different objects, "
-            "overlapping validity windows. Scope to a specific entity or scan all."
+            "Query multiple Locus nodes simultaneously and fuse results via RRF. "
+            "Provenance tags include the node name (e.g. 'jarv:bm25', 'kai:kg'). "
+            "Designed for Jarv/Kai/Tai multi-node setups."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "entity": {"type": "string", "description": "Optional entity to scope the search."},
-                "store_path": {"type": "string", "default": ".locus"},
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "default": 5},
+                "nodes": {"type": "array", "items": {"type": "string"}, "description": "Subset of node names. Omit for all."},
+                "as_of": {"type": "string"},
+                "cluster_path": {"type": "string", "description": "Path to cluster registry JSON."},
             },
+            "required": ["query", "cluster_path"],
         },
     },
-    "locus_add_alias": {
-        "description": (
-            "Register an entity alias so variant names resolve to the same canonical entity. "
-            "e.g. alias='Jeff', canonical='Jeff Milam'."
-        ),
+    "locus_add_node": {
+        "description": "Register a named node (Locus store) in the cluster registry.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "alias": {"type": "string"},
-                "canonical": {"type": "string"},
-                "store_path": {"type": "string", "default": ".locus"},
+                "name": {"type": "string", "description": "Node name (e.g. 'jarv')."},
+                "store_path": {"type": "string"},
+                "cluster_path": {"type": "string"},
             },
-            "required": ["alias", "canonical"],
+            "required": ["name", "store_path", "cluster_path"],
         },
     },
-    "locus_suggest_aliases": {
-        "description": (
-            "Suggest entity pairs that may refer to the same thing, based on name similarity. "
-            "Returns candidates for human review — use locus_add_alias to confirm."
-        ),
+    "locus_remove_node": {
+        "description": "Unregister a node from the cluster (does not delete its store).",
         "input_schema": {
             "type": "object",
             "properties": {
-                "threshold": {"type": "number", "default": 0.75, "description": "Similarity threshold (0–1)."},
-                "store_path": {"type": "string", "default": ".locus"},
+                "name": {"type": "string"},
+                "cluster_path": {"type": "string"},
             },
+            "required": ["name", "cluster_path"],
+        },
+    },
+    "locus_list_nodes": {
+        "description": "List all cluster nodes with their corpus and KG stats.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cluster_path": {"type": "string"},
+            },
+            "required": ["cluster_path"],
         },
     },
 }
