@@ -44,14 +44,23 @@ jobs:
           python -c "
           import locus
           from locus import LocusEngine, LocusCluster, LocusWatcher, LocusEval
-          from locus import OMPABridge, LocusDoctor, KGExporter
+          from locus import OMPABridge, GitHubBridge, LocusDoctor, KGExporter
+          from locus import AsyncLocusEngine, LocusHooks, LocusReasoner
+          from locus import QueryExpander, ExpansionResult, LocusSnapshot
+          from locus import LocusReranker, RerankerWeights, ContextPacker, PackedContext
           from locus.mcp.server import _list_tools, _call_tool
           from locus.mcp.prompts import list_prompts, render_prompt
           from locus.cluster import LocusCluster
           from locus.bridge.ompa import OMPABridge
+          from locus.bridge.github import GitHubBridge
           from locus.eval import LocusEval
           from locus.doctor import LocusDoctor
           from locus.export import KGExporter
           from locus.watcher import LocusWatcher
+          from locus.async_core import AsyncLocusEngine
+          from locus.hooks import LocusHooks
+          from locus.reasoning import LocusReasoner
+          from locus.query_expander import QueryExpander
+          from locus.snapshot import LocusSnapshot
           print('All imports OK')
           "
