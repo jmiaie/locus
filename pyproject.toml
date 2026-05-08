@@ -9,6 +9,9 @@ description = "Vectorless RAG with MCP — BM25 + temporal KG + link walking. Ze
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
+authors = [
+    {name = "Jeff Milam", email = "jmiaie@users.noreply.github.com"},
+]
 keywords = ["rag", "retrieval", "mcp", "knowledge-graph", "bm25", "vectorless", "llm", "ai"]
 classifiers = [
     "Development Status :: 4 - Beta",
