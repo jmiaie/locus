@@ -93,6 +93,33 @@ def main() -> None:
     # ----------------------------------------------------------------
     # Phase 6 — Evaluation
     # ----------------------------------------------------------------
+    # ----------------------------------------------------------------
+    # Phase 9 — Reasoning, corpus inspection, GitHub bridge
+    # ----------------------------------------------------------------
+    p_reason = sub.add_parser("reason", help="Multi-hop KG reasoning for a question")
+    p_reason.add_argument("question")
+    p_reason.add_argument("--depth", type=int, default=3)
+
+    p_paths = sub.add_parser("find-paths", help="Find KG paths between two entities")
+    p_paths.add_argument("entity_a")
+    p_paths.add_argument("entity_b")
+    p_paths.add_argument("--depth", type=int, default=3)
+
+    p_inspect = sub.add_parser("inspect", help="Inspect a document's corpus stats and terms")
+    p_inspect.add_argument("doc_path")
+    p_inspect.add_argument("--limit", type=int, default=20)
+
+    p_top = sub.add_parser("top-terms", help="Show corpus-wide top terms")
+    p_top.add_argument("--limit", type=int, default=20)
+
+    p_gh = sub.add_parser("ingest-github", help="Ingest markdown from a GitHub repository")
+    p_gh.add_argument("repo", help="owner/repo")
+    p_gh.add_argument("--branch", default="main")
+    p_gh.add_argument("--path",   default="")
+    p_gh.add_argument("--pattern", default="*.md")
+    p_gh.add_argument("--token",  default=None, help="GitHub personal access token")
+    p_gh.add_argument("--cache-dir", dest="cache_dir", default=None)
+
     p_bench = sub.add_parser("benchmark", help="Measure retrieval quality (recall@K, MRR)")
     p_bench.add_argument("qa_file", help="JSON file with [{query, expected_docs}] pairs")
     p_bench.add_argument("--k", default="1,3,5", help="Comma-separated K values")
@@ -263,6 +290,29 @@ def main() -> None:
         from .bridge.ompa import OMPABridge
         bridge = OMPABridge(engine, vault_path=args.vault_path)
         result = bridge.ingest(pattern=args.pattern)
+        print(json.dumps(result, indent=2))
+
+    elif args.cmd == "reason":
+        print(json.dumps(engine.reason(args.question, max_depth=args.depth), indent=2))
+
+    elif args.cmd == "find-paths":
+        print(json.dumps(engine.find_paths(args.entity_a, args.entity_b, max_depth=args.depth), indent=2))
+
+    elif args.cmd == "inspect":
+        print(json.dumps(engine.inspect_doc(args.doc_path, limit=args.limit), indent=2))
+
+    elif args.cmd == "top-terms":
+        print(json.dumps(engine.top_terms(limit=args.limit), indent=2))
+
+    elif args.cmd == "ingest-github":
+        from .bridge.github import GitHubBridge
+        bridge = GitHubBridge(engine, repo=args.repo, token=args.token)
+        result = bridge.ingest(
+            branch=args.branch,
+            path=args.path,
+            pattern=args.pattern,
+            cache_dir=args.cache_dir,
+        )
         print(json.dumps(result, indent=2))
 
     elif args.cmd == "benchmark":

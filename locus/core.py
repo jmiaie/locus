@@ -37,10 +37,12 @@ from .retrieval.fusion import rrf_fuse
 from .retrieval.classifier import classify_query, INTENT_WEIGHTS, QueryIntent
 from .context.bulletin import ContextBulletin
 from .context.budget import ContextBudget
+from .hooks import LocusHooks
+from .reasoning import LocusReasoner
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 # Fixed weights appended after intent weights: [structural, recency]
 _STRUCTURAL_WEIGHT  = 1.0
@@ -85,6 +87,8 @@ class LocusEngine:
         self._link_pop = LinkPopularityRetriever(self.corpus)
         self._reranker = LocusReranker(self.corpus, kg=self.kg)  # Phase 8
         self._packer = ContextPacker()                            # Phase 8
+        self._hooks = LocusHooks()                                # Phase 9
+        self._reasoner = LocusReasoner(self.kg)                   # Phase 9
 
         # Query result cache — invalidated on corpus changes
         self._query_cache: dict[str, list[ScoredChunk]] = {}
@@ -95,6 +99,13 @@ class LocusEngine:
     # Indexing
     # ------------------------------------------------------------------
 
+    def set_hooks(self, hooks: "LocusHooks") -> None:
+        """Replace the engine's hook registry."""
+        self._hooks = hooks
+
+    def _fire(self, event: str, **data) -> None:
+        self._hooks.fire(event, self, **data)
+
     def index(self, path: str | Path, pattern: str = "**/*.md") -> dict:
         """
         Index a file or directory.
@@ -103,10 +114,13 @@ class LocusEngine:
         Returns counts of files, chunks added, and KG triples extracted.
         """
         path = Path(path)
+        self._fire("pre_index", path=str(path), pattern=pattern)
         if path.is_file():
             chunks = self.corpus.add_file(path)
             triples = self.kg.populate_from_file(path)
-            return {"files": 1, "chunks": chunks, "triples": triples}
+            result = {"files": 1, "chunks": chunks, "triples": triples}
+            self._fire("post_index", result=result)
+            return result
 
         chunks = self.corpus.add_directory(path, pattern=pattern)
         triples = 0
@@ -115,16 +129,21 @@ class LocusEngine:
                 continue
             triples += self.kg.populate_from_file(f, base_path=path)
         self._invalidate_cache()
-        return {
+        result = {
             "files": self.corpus.doc_count(),
             "chunks": chunks,
             "triples": triples,
         }
+        self._fire("post_index", result=result)
+        return result
 
     def forget(self, doc_path: str) -> dict:
+        self._fire("pre_forget", doc_path=doc_path)
         removed = self.corpus.remove_file(doc_path)
         self._invalidate_cache()
-        return {"removed_chunks": removed, "doc": doc_path}
+        result = {"removed_chunks": removed, "doc": doc_path}
+        self._fire("post_forget", result=result)
+        return result
 
     def sync(self, path: str | Path, pattern: str = "**/*.md") -> dict:
         for doc in self.corpus.list_docs():
@@ -166,6 +185,7 @@ class LocusEngine:
                 return self._query_cache[key]
             self._cache_misses += 1
 
+        self._fire("pre_retrieve", query=query, limit=limit)
         bm25_hits = self._bm25.search(query, limit=limit * 2)
         kg_hits = self._kg_ret.search(query, limit=limit * 2, as_of=as_of)
         link_hits = self._walker.walk(bm25_hits[:3], depth=2, limit=limit) if use_links and bm25_hits else []
@@ -203,6 +223,7 @@ class LocusEngine:
                 del self._query_cache[oldest]
             self._query_cache[key] = fused
 
+        self._fire("post_retrieve", query=query, result_count=len(fused))
         return fused
 
     # ------------------------------------------------------------------
@@ -347,11 +368,14 @@ class LocusEngine:
         valid_to: str = None,
         source: str = None,
     ) -> dict:
+        self._fire("pre_add_fact", subject=subject, predicate=predicate, object_=object_)
         self.kg.add_triple(
             subject, predicate, object_,
             valid_from=valid_from, valid_to=valid_to, source=source,
         )
-        return {"added": f"{subject} --{predicate}--> {object_}"}
+        result = {"added": f"{subject} --{predicate}--> {object_}"}
+        self._fire("post_add_fact", result=result)
+        return result
 
     def query_entity(self, entity: str, as_of: str = None) -> dict:
         triples = self.kg.query_entity(entity, as_of=as_of)
@@ -575,6 +599,53 @@ class LocusEngine:
         from .export import KGExporter
         count = KGExporter(self.kg).export(path, fmt=fmt)
         return {"path": path, "triples_exported": count, "format": fmt or "auto"}
+
+    # ------------------------------------------------------------------
+    # Phase 9 — reasoning, hooks, corpus inspection
+    # ------------------------------------------------------------------
+
+    def reason(self, question: str, max_depth: int = 3) -> dict:
+        """Multi-hop KG reasoning over detected entities in *question*."""
+        return self._reasoner.reason(question, max_depth=max_depth)
+
+    def find_paths(
+        self,
+        entity_a: str,
+        entity_b: str,
+        max_depth: int = 3,
+        predicate_filter: list[str] | None = None,
+    ) -> list[dict]:
+        """Find all KG paths between two entities (BFS up to *max_depth* hops)."""
+        paths = self._reasoner.find_paths(
+            entity_a, entity_b,
+            max_depth=max_depth,
+            predicate_filter=predicate_filter,
+        )
+        return [p.to_dict() for p in paths]
+
+    def inspect_doc(self, doc_path: str, limit: int = 20) -> dict:
+        """Return corpus statistics and top terms for a single document."""
+        chunks = self.corpus.get_chunks_for_doc(doc_path)
+        if not chunks:
+            return {"error": f"Document not found: {doc_path}"}
+        terms = self.corpus.inspect_doc_terms(doc_path, limit=limit)
+        entities: list[str] = []
+        links: list[str] = []
+        for c in chunks:
+            entities.extend(c.metadata.get("entities", []))
+            links.extend(c.metadata.get("links", []))
+        return {
+            "doc_path": doc_path,
+            "chunk_count": len(chunks),
+            "word_count": sum(len(c.content.split()) for c in chunks),
+            "top_terms": terms,
+            "entities": list(dict.fromkeys(entities))[:20],
+            "links": list(dict.fromkeys(links))[:20],
+        }
+
+    def top_terms(self, limit: int = 20) -> list[dict]:
+        """Return the corpus-wide top terms by document frequency."""
+        return self.corpus.top_terms(limit=limit)
 
     def session_start(self) -> dict:
         return {

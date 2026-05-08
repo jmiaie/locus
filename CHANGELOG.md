@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.8.0] — 2026-05-08
+
+### Added
+- **`AsyncLocusEngine`** — async façade over `LocusEngine` backed by a `ThreadPoolExecutor`; async context manager (`async with`); `__getattr__` pass-through for all sync methods
+- **`LocusHooks`** — lightweight event hook system; `on()` decorator, `register()`, `unregister()`, `fire()`, `list_hooks()`, `clear()`; handlers are error-isolated
+- **`LocusReasoner`** — multi-hop KG reasoning; `find_paths(a, b, max_depth, predicate_filter)` via BFS; `reason(question)` extracts entities and surfaces connecting chains
+- **`GitHubBridge`** — ingest markdown from any GitHub repository; fetches file tree + raw content via GitHub REST API; supports private repos with token or `GITHUB_TOKEN` env var
+- **`Corpus.top_terms(limit)`** — corpus-wide top terms ranked by document frequency
+- **`Corpus.inspect_doc_terms(doc_path, limit)`** — per-document top terms by chunk coverage
+- **`LocusEngine.reason(question, max_depth)`** — delegate to `LocusReasoner.reason()`
+- **`LocusEngine.find_paths(entity_a, entity_b, ...)`** — delegate to `LocusReasoner.find_paths()`
+- **`LocusEngine.inspect_doc(doc_path, limit)`** — document stats: chunk count, word count, top terms, entities, wikilinks
+- **`LocusEngine.top_terms(limit)`** — corpus-wide term frequency report
+- **`LocusEngine.set_hooks(hooks)` / `LocusEngine._fire(event)`** — hook integration; fires `pre/post_index`, `pre/post_retrieve`, `pre/post_forget`, `pre/post_add_fact`
+- New CLI commands: `reason`, `find-paths`, `inspect`, `top-terms`, `ingest-github`
+- New MCP tools: `locus_reason`, `locus_find_paths`, `locus_inspect`, `locus_top_terms`, `locus_ingest_github` (total: 34)
+- All new classes exported from top-level `locus` package: `AsyncLocusEngine`, `LocusHooks`, `LocusReasoner`, `GitHubBridge`
+- 21 new tests (207 total, all passing)
+
+### Changed
+- `__version__` bumped to `0.8.0`
+- `pyproject.toml` version updated to `0.8.0`
+
+---
+
 ## [0.6.0] — 2026-05-07
 
 ### Added

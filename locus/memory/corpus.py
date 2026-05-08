@@ -288,3 +288,55 @@ class Corpus:
             "chunk_count": self.chunk_count(),
             "avg_doc_length": round(self.avg_doc_length(), 1),
         }
+
+    # ------------------------------------------------------------------
+    # Inspection helpers (Phase 9)
+    # ------------------------------------------------------------------
+
+    def top_terms(self, limit: int = 20) -> list[dict]:
+        """Return the *limit* most frequent terms across the entire corpus.
+
+        Each entry: ``{"term": str, "doc_count": int, "total_tf": float}``.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT term,
+                       COUNT(DISTINCT chunk_id) AS doc_count,
+                       SUM(tf)                  AS total_tf
+                FROM   term_index
+                GROUP  BY term
+                ORDER  BY doc_count DESC, total_tf DESC
+                LIMIT  ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            {"term": r[0], "doc_count": r[1], "total_tf": round(r[2], 4)}
+            for r in rows
+        ]
+
+    def inspect_doc_terms(self, doc_path: str, limit: int = 20) -> list[dict]:
+        """Return the top terms for a single document.
+
+        Each entry: ``{"term": str, "chunk_count": int, "total_tf": float}``.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT ti.term,
+                       COUNT(*) AS chunk_count,
+                       SUM(ti.tf) AS total_tf
+                FROM   term_index ti
+                JOIN   chunks c ON ti.chunk_id = c.id
+                WHERE  c.doc_path = ?
+                GROUP  BY ti.term
+                ORDER  BY chunk_count DESC, total_tf DESC
+                LIMIT  ?
+                """,
+                (doc_path, limit),
+            ).fetchall()
+        return [
+            {"term": r[0], "chunk_count": r[1], "total_tf": round(r[2], 4)}
+            for r in rows
+        ]

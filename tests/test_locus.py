@@ -2223,3 +2223,257 @@ def test_prepare_context_no_rerank(tmp_path):
     engine.index(tmp_path)
     result = engine.prepare_context("content", rerank=False)
     assert result["chunks_included"] >= 0
+
+
+# -----------------------------------------------------------------------
+# Phase 9 — Async engine
+# -----------------------------------------------------------------------
+
+def test_async_engine_index_retrieve(tmp_path):
+    import asyncio
+    from locus.async_core import AsyncLocusEngine
+
+    async def _run():
+        async with AsyncLocusEngine(store_path=str(tmp_path / ".locus")) as ae:
+            (tmp_path / "doc.md").write_text("# Auth\n\nJWT tokens.")
+            result = await ae.index(str(tmp_path))
+            assert result["files"] >= 1
+            chunks = await ae.retrieve("JWT tokens")
+            assert isinstance(chunks, list)
+
+    asyncio.run(_run())
+
+
+def test_async_engine_getattr_passthrough(tmp_path):
+    from locus.async_core import AsyncLocusEngine
+    ae = AsyncLocusEngine(store_path=str(tmp_path / ".locus"))
+    # cache_stats() is not wrapped async — falls through to __getattr__ → sync engine
+    result = ae.cache_stats()
+    assert "size" in result
+
+
+def test_async_engine_repr(tmp_path):
+    from locus.async_core import AsyncLocusEngine
+    ae = AsyncLocusEngine(store_path=str(tmp_path / ".locus"))
+    assert "AsyncLocusEngine" in repr(ae)
+
+
+# -----------------------------------------------------------------------
+# Phase 9 — Hooks
+# -----------------------------------------------------------------------
+
+def test_hooks_register_and_fire():
+    from locus.hooks import LocusHooks, HookContext
+    hooks = LocusHooks()
+    fired = []
+
+    @hooks.on("test_event")
+    def handler(ctx: HookContext):
+        fired.append(ctx.data.get("value"))
+
+    hooks.fire("test_event", engine=None, value=42)
+    assert fired == [42]
+
+
+def test_hooks_error_isolated():
+    from locus.hooks import LocusHooks
+    hooks = LocusHooks()
+
+    @hooks.on("bad_event")
+    def bad_handler(ctx):
+        raise RuntimeError("intentional")
+
+    # Should not raise
+    hooks.fire("bad_event", engine=None)
+
+
+def test_hooks_list_hooks():
+    from locus.hooks import LocusHooks
+    hooks = LocusHooks()
+    hooks.register("ev1", lambda ctx: None)
+    hooks.register("ev1", lambda ctx: None)
+    hooks.register("ev2", lambda ctx: None)
+    listing = hooks.list_hooks()
+    assert listing["ev1"] == 2
+    assert listing["ev2"] == 1
+
+
+def test_hooks_unregister():
+    from locus.hooks import LocusHooks
+    hooks = LocusHooks()
+    fired = []
+    fn = lambda ctx: fired.append(1)  # noqa: E731
+    hooks.register("ev", fn)
+    hooks.unregister("ev", fn)
+    hooks.fire("ev", engine=None)
+    assert fired == []
+
+
+def test_engine_set_hooks_fires_on_index(tmp_path):
+    from locus.hooks import LocusHooks
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    hooks = LocusHooks()
+    post_events = []
+
+    @hooks.on("post_index")
+    def capture(ctx):
+        post_events.append(ctx.data.get("result", {}))
+
+    engine.set_hooks(hooks)
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+    assert len(post_events) == 1
+    assert "files" in post_events[0]
+
+
+def test_engine_hooks_on_forget(tmp_path):
+    from locus.hooks import LocusHooks
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+
+    hooks = LocusHooks()
+    pre_events = []
+
+    @hooks.on("pre_forget")
+    def capture(ctx):
+        pre_events.append(ctx.data.get("doc_path"))
+
+    engine.set_hooks(hooks)
+    doc_path = engine.corpus.list_docs()[0]
+    engine.forget(doc_path)
+    assert len(pre_events) == 1
+    assert pre_events[0] == doc_path
+
+
+# -----------------------------------------------------------------------
+# Phase 9 — Reasoning
+# -----------------------------------------------------------------------
+
+def test_reasoning_find_paths_direct(tmp_path):
+    from locus.reasoning import LocusReasoner
+    from locus.memory.knowledge_graph import TemporalKG
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "leads", "AuthTeam")
+    kg.add_triple("AuthTeam", "owns", "JWTService")
+    reasoner = LocusReasoner(kg)
+    paths = reasoner.find_paths("Alice", "JWTService", max_depth=2)
+    assert len(paths) >= 1
+    assert paths[0].start == "Alice"
+    assert paths[0].end == "JWTService"
+    assert paths[0].length == 2
+
+
+def test_reasoning_find_paths_same_entity(tmp_path):
+    from locus.reasoning import LocusReasoner
+    from locus.memory.knowledge_graph import TemporalKG
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    reasoner = LocusReasoner(kg)
+    paths = reasoner.find_paths("Alice", "Alice")
+    assert len(paths) == 1
+    assert paths[0].length == 0
+
+
+def test_reasoning_path_narrative(tmp_path):
+    from locus.reasoning import LocusReasoner
+    from locus.memory.knowledge_graph import TemporalKG
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "leads", "Team")
+    reasoner = LocusReasoner(kg)
+    paths = reasoner.find_paths("Alice", "Team", max_depth=1)
+    assert len(paths) >= 1
+    narrative = paths[0].narrative()
+    assert "Alice" in narrative
+    assert "leads" in narrative
+
+
+def test_reasoning_reason_returns_keys(tmp_path):
+    from locus.memory.knowledge_graph import TemporalKG
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "leads", "Platform")
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    # Share the same KG
+    engine.kg = kg
+    engine._reasoner._kg = kg
+    result = engine.reason("How is Alice related to Platform?")
+    assert "question" in result
+    assert "entities_detected" in result
+    assert "reasoning_chains" in result
+    assert "entity_neighborhood" in result
+
+
+def test_reasoning_no_paths_empty(tmp_path):
+    from locus.reasoning import LocusReasoner
+    from locus.memory.knowledge_graph import TemporalKG
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    reasoner = LocusReasoner(kg)
+    paths = reasoner.find_paths("Alice", "Bob", max_depth=2)
+    assert paths == []
+
+
+# -----------------------------------------------------------------------
+# Phase 9 — Corpus inspection
+# -----------------------------------------------------------------------
+
+def test_top_terms_returns_list(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Authentication\n\nJWT tokens for authentication.")
+    engine.index(tmp_path)
+    terms = engine.top_terms(limit=10)
+    assert isinstance(terms, list)
+    assert len(terms) <= 10
+    assert all("term" in t and "doc_count" in t for t in terms)
+
+
+def test_top_terms_most_frequent_ranked_first(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "a.md").write_text("authentication jwt authentication")
+    (tmp_path / "b.md").write_text("authentication oauth")
+    engine.index(tmp_path)
+    terms = engine.top_terms(limit=5)
+    names = [t["term"] for t in terms]
+    # "authentication" appears in both docs — should be near the top
+    assert "authentication" in names
+
+
+def test_inspect_doc_returns_structure(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nJWT tokens [[Security]] authentication.")
+    engine.index(tmp_path)
+    doc_path = engine.corpus.list_docs()[0]
+    result = engine.inspect_doc(doc_path)
+    assert "doc_path" in result
+    assert "chunk_count" in result
+    assert "top_terms" in result
+    assert result["chunk_count"] >= 1
+
+
+def test_inspect_doc_missing_returns_error(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    result = engine.inspect_doc("nonexistent.md")
+    assert "error" in result
+
+
+# -----------------------------------------------------------------------
+# Phase 9 — GitHub bridge (offline — tests request plumbing without network)
+# -----------------------------------------------------------------------
+
+def test_github_bridge_init():
+    from locus.bridge.github import GitHubBridge
+    engine = None  # not needed for init test
+    bridge = GitHubBridge(engine, repo="owner/repo", token="tok123")
+    assert bridge._repo == "owner/repo"
+    assert bridge._token == "tok123"
+
+
+def test_github_bridge_matches():
+    from locus.bridge.github import GitHubBridge
+    assert GitHubBridge._matches("docs/README.md", "", "*.md")
+    assert GitHubBridge._matches("docs/guide.md", "docs", "*.md")
+    assert not GitHubBridge._matches("src/main.py", "", "*.md")
+    assert not GitHubBridge._matches("other/guide.md", "docs", "*.md")
+
+
+def test_version_is_0_8_0():
+    from locus.core import __version__
+    assert __version__ == "0.8.0"

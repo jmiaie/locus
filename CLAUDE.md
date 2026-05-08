@@ -6,7 +6,7 @@ Locus is a **vectorless RAG engine** with MCP integration. No embedding models, 
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v         # 167 tests, all should pass
+pytest tests/ -v         # 207 tests, all should pass
 locus --help             # CLI entry point
 ```
 

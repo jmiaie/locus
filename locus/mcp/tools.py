@@ -396,4 +396,92 @@ TOOLS: dict[str, dict] = {
             "required": ["cluster_path"],
         },
     },
+    # ------------------------------------------------------------------
+    # Phase 9 — Reasoning, corpus inspection, GitHub bridge
+    # ------------------------------------------------------------------
+    "locus_reason": {
+        "description": (
+            "Multi-hop KG reasoning. Extracts entities from the question, "
+            "explores their KG neighbourhood, and surfaces connecting paths "
+            "between them. Returns reasoning_chains, entity_neighborhood, "
+            "and detected entities. Ideal for questions like "
+            "'How is Alice connected to the auth system?'"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question":   {"type": "string"},
+                "max_depth":  {"type": "integer", "default": 3},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["question"],
+        },
+    },
+    "locus_find_paths": {
+        "description": (
+            "Find all shortest KG paths between two entities using BFS. "
+            "Returns each path as a list of hops with a human-readable narrative. "
+            "Useful for tracing how two people, systems, or concepts are connected."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_a":         {"type": "string"},
+                "entity_b":         {"type": "string"},
+                "max_depth":        {"type": "integer", "default": 3},
+                "predicate_filter": {"type": "array", "items": {"type": "string"}},
+                "store_path":       {"type": "string", "default": ".locus"},
+            },
+            "required": ["entity_a", "entity_b"],
+        },
+    },
+    "locus_inspect": {
+        "description": (
+            "Inspect a document's corpus representation: chunk count, word count, "
+            "top BM25 terms, entities, and internal wikilinks. "
+            "Useful for debugging indexing quality."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc_path":   {"type": "string"},
+                "limit":      {"type": "integer", "default": 20},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["doc_path"],
+        },
+    },
+    "locus_top_terms": {
+        "description": (
+            "Return the corpus-wide top terms by document frequency. "
+            "Each entry includes the term, how many chunks contain it, and total TF. "
+            "Useful for understanding what vocabulary dominates the knowledge base."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit":      {"type": "integer", "default": 20},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+        },
+    },
+    "locus_ingest_github": {
+        "description": (
+            "Fetch markdown files from a GitHub repository and index them. "
+            "Fetches the file tree, downloads matching files, and calls locus_index. "
+            "Requires a GITHUB_TOKEN env var or token param for private repos."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo":       {"type": "string", "description": "owner/repo"},
+                "branch":     {"type": "string", "default": "main"},
+                "path":       {"type": "string", "default": "", "description": "Sub-directory within repo."},
+                "pattern":    {"type": "string", "default": "*.md"},
+                "token":      {"type": "string", "description": "GitHub PAT (or set GITHUB_TOKEN env var)."},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["repo"],
+        },
+    },
 }

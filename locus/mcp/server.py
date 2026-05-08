@@ -205,6 +205,41 @@ def _call_tool(name: str, arguments: dict) -> dict:
             report = ev.score_from_file(arguments["qa_file"])
             return report.to_dict()
 
+        # Phase 9 — reasoning, corpus inspection, GitHub bridge
+        if name == "locus_reason":
+            return engine.reason(
+                question=arguments["question"],
+                max_depth=int(arguments.get("max_depth", 3)),
+            )
+
+        if name == "locus_find_paths":
+            return {
+                "paths": engine.find_paths(
+                    entity_a=arguments["entity_a"],
+                    entity_b=arguments["entity_b"],
+                    max_depth=int(arguments.get("max_depth", 3)),
+                    predicate_filter=arguments.get("predicate_filter"),
+                )
+            }
+
+        if name == "locus_inspect":
+            return engine.inspect_doc(
+                doc_path=arguments["doc_path"],
+                limit=int(arguments.get("limit", 20)),
+            )
+
+        if name == "locus_top_terms":
+            return {"terms": engine.top_terms(limit=int(arguments.get("limit", 20)))}
+
+        if name == "locus_ingest_github":
+            from ..bridge.github import GitHubBridge
+            bridge = GitHubBridge(engine, repo=arguments["repo"], token=arguments.get("token"))
+            return bridge.ingest(
+                branch=arguments.get("branch", "main"),
+                path=arguments.get("path", ""),
+                pattern=arguments.get("pattern", "*.md"),
+            )
+
         return {"error": f"Unhandled tool: {name}"}
 
     except KeyError as e:
