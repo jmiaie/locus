@@ -30,6 +30,7 @@ from .retrieval.kg_retrieval import KGRetriever
 from .retrieval.link_walker import LinkWalker
 from .retrieval.structural import StructuralRetriever
 from .retrieval.recency import RecencyRetriever
+from .retrieval.link_popularity import LinkPopularityRetriever
 from .retrieval.fusion import rrf_fuse
 from .retrieval.classifier import classify_query, INTENT_WEIGHTS, QueryIntent
 from .context.bulletin import ContextBulletin
@@ -37,11 +38,12 @@ from .context.budget import ContextBudget
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 # Fixed weights appended after intent weights: [structural, recency]
-_STRUCTURAL_WEIGHT = 1.0
-_RECENCY_WEIGHT = 0.3
+_STRUCTURAL_WEIGHT  = 1.0
+_RECENCY_WEIGHT     = 0.3
+_LINK_POP_WEIGHT    = 0.2
 
 
 class LocusEngine:
@@ -74,8 +76,9 @@ class LocusEngine:
         self._bm25 = BM25Retriever(self.corpus)
         self._kg_ret = KGRetriever(self.kg, self.corpus)
         self._walker = LinkWalker(self.corpus)
-        self._structural = StructuralRetriever(self.corpus)   # Phase 2
-        self._recency = RecencyRetriever(self.corpus)          # Phase 2
+        self._structural = StructuralRetriever(self.corpus)
+        self._recency = RecencyRetriever(self.corpus)
+        self._link_pop = LinkPopularityRetriever(self.corpus)  # Phase 7
 
     # ------------------------------------------------------------------
     # Indexing
@@ -145,13 +148,14 @@ class LocusEngine:
         kg_hits = self._kg_ret.search(query, limit=limit * 2, as_of=as_of)
         link_hits = self._walker.walk(bm25_hits[:3], depth=2, limit=limit) if use_links and bm25_hits else []
         structural_hits = self._structural.search(query, limit=limit * 2)
-        recency_hits = self._recency.search(limit=limit * 2)
+        recency_hits    = self._recency.search(limit=limit * 2)
+        link_pop_hits   = self._link_pop.search(limit=limit * 2)
 
         intent_weights = INTENT_WEIGHTS[intent]  # [bm25, kg, link]
-        all_weights = [*intent_weights, _STRUCTURAL_WEIGHT, _RECENCY_WEIGHT]
+        all_weights = [*intent_weights, _STRUCTURAL_WEIGHT, _RECENCY_WEIGHT, _LINK_POP_WEIGHT]
 
         fused = rrf_fuse(
-            [bm25_hits, kg_hits, link_hits, structural_hits, recency_hits],
+            [bm25_hits, kg_hits, link_hits, structural_hits, recency_hits, link_pop_hits],
             weights=all_weights,
             limit=limit,
         )
@@ -378,6 +382,59 @@ class LocusEngine:
             )
         result["narrative"] = ". ".join(narrative_parts) + "."
         return result
+
+    # ------------------------------------------------------------------
+    # Phase 7 — KG traversal, doctor, export
+    # ------------------------------------------------------------------
+
+    def kg_traverse(
+        self,
+        start: str,
+        max_depth: int = 2,
+        predicate_filter: list[str] | None = None,
+        direction: str = "both",
+    ) -> dict:
+        """BFS traversal from a starting entity. Returns entity→facts map."""
+        result = self.kg.traverse(start, max_depth=max_depth,
+                                   predicate_filter=predicate_filter, direction=direction)
+        return {
+            entity: [
+                {"subject": t.subject, "predicate": t.predicate, "object": t.object,
+                 "valid_from": t.valid_from, "valid_to": t.valid_to, "source": t.source}
+                for t in triples
+            ]
+            for entity, triples in result.items()
+        }
+
+    def kg_match(
+        self,
+        subject: str = "*",
+        predicate: str = "*",
+        obj: str = "*",
+        as_of: str = None,
+    ) -> dict:
+        """Pattern match over the KG. '*' is a wildcard."""
+        triples = self.kg.match(subject=subject, predicate=predicate, obj=obj, as_of=as_of)
+        return {
+            "pattern": {"subject": subject, "predicate": predicate, "object": obj},
+            "count": len(triples),
+            "triples": [
+                {"subject": t.subject, "predicate": t.predicate, "object": t.object,
+                 "valid_from": t.valid_from, "valid_to": t.valid_to, "source": t.source}
+                for t in triples
+            ],
+        }
+
+    def doctor(self) -> dict:
+        """Run health checks on this store. Returns structured report."""
+        from .doctor import LocusDoctor
+        return LocusDoctor(self).to_dict()
+
+    def export_kg(self, path: str, fmt: str = None) -> dict:
+        """Export the KG to a file. fmt: graphml | jsonl | dot (auto from extension)."""
+        from .export import KGExporter
+        count = KGExporter(self.kg).export(path, fmt=fmt)
+        return {"path": path, "triples_exported": count, "format": fmt or "auto"}
 
     def session_start(self) -> dict:
         return {

@@ -97,6 +97,23 @@ def main() -> None:
     p_bench.add_argument("qa_file", help="JSON file with [{query, expected_docs}] pairs")
     p_bench.add_argument("--k", default="1,3,5", help="Comma-separated K values")
 
+    sub.add_parser("doctor", help="Health check: corpus, KG, bulletin, store size")
+
+    p_export = sub.add_parser("export-kg", help="Export KG to GraphML / JSONL / DOT")
+    p_export.add_argument("path", help="Output file path")
+    p_export.add_argument("--format", choices=["graphml", "jsonl", "dot"], default=None)
+
+    p_traverse = sub.add_parser("kg-traverse", help="BFS traversal from an entity")
+    p_traverse.add_argument("start")
+    p_traverse.add_argument("--depth", type=int, default=2)
+    p_traverse.add_argument("--direction", choices=["out", "in", "both"], default="both")
+
+    p_match = sub.add_parser("kg-match", help="Pattern match over the KG (* = wildcard)")
+    p_match.add_argument("--subject",   default="*")
+    p_match.add_argument("--predicate", default="*")
+    p_match.add_argument("--obj",       default="*")
+    p_match.add_argument("--as-of",     dest="as_of", default=None)
+
     args = parser.parse_args()
 
     # ----------------------------------------------------------------
@@ -203,6 +220,19 @@ def main() -> None:
         )
         print(f"Watching {args.path}  (interval={args.interval}s)  Ctrl-C to stop")
         watcher.start(background=False)
+
+    elif args.cmd == "doctor":
+        from .doctor import LocusDoctor
+        print(LocusDoctor(engine).report())
+
+    elif args.cmd == "export-kg":
+        print(json.dumps(engine.export_kg(args.path, fmt=args.format), indent=2))
+
+    elif args.cmd == "kg-traverse":
+        print(json.dumps(engine.kg_traverse(args.start, max_depth=args.depth, direction=args.direction), indent=2))
+
+    elif args.cmd == "kg-match":
+        print(json.dumps(engine.kg_match(subject=args.subject, predicate=args.predicate, obj=args.obj, as_of=args.as_of), indent=2))
 
     elif args.cmd == "ingest-ompa":
         from .bridge.ompa import OMPABridge

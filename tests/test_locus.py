@@ -1645,3 +1645,329 @@ def test_http_server_dispatch_unknown_method(tmp_path):
     engine = LocusEngine(store_path=tmp_path / ".locus")
     resp = _dispatch({"jsonrpc": "2.0", "id": 3, "method": "bogus/method", "params": {}}, engine)
     assert "error" in resp
+
+
+# -----------------------------------------------------------------------
+# Phase 7 — KG traversal
+# -----------------------------------------------------------------------
+
+def test_kg_traverse_basic(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "leads",    "Platform")
+    kg.add_triple("Platform", "uses",  "Kubernetes")
+    kg.add_triple("Alice", "works_at", "Acme")
+
+    result = kg.traverse("Alice", max_depth=2)
+    assert "Alice" in result
+    assert "Platform" in result       # 1 hop
+    assert "Kubernetes" in result     # 2 hops
+
+
+def test_kg_traverse_depth_one(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("A", "rel", "B")
+    kg.add_triple("B", "rel", "C")
+
+    result = kg.traverse("A", max_depth=1)
+    assert "A" in result
+    assert "B" in result
+    assert "C" not in result          # too deep
+
+
+def test_kg_traverse_predicate_filter(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "leads",    "Platform")
+    kg.add_triple("Alice", "works_at", "Acme")
+
+    result = kg.traverse("Alice", max_depth=1, predicate_filter=["leads"])
+    entities = set(result.keys())
+    assert "Platform" in entities
+    assert "Acme" not in entities
+
+
+def test_kg_traverse_direction_out(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "leads", "Platform")
+    kg.add_triple("Bob",   "leads", "Alice")    # Alice is object here
+
+    # "out" only follows Alice as subject
+    result = kg.traverse("Alice", max_depth=1, direction="out")
+    assert "Platform" in result
+    assert "Bob" not in result
+
+
+# -----------------------------------------------------------------------
+# Phase 7 — KG pattern match
+# -----------------------------------------------------------------------
+
+def test_kg_match_all_wildcard(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "leads",    "Platform")
+    kg.add_triple("Bob",   "works_at", "Acme")
+
+    triples = kg.match("*", "*", "*")
+    assert len(triples) == 2
+
+
+def test_kg_match_subject_fixed(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "leads",    "Platform")
+    kg.add_triple("Alice", "works_at", "Acme")
+    kg.add_triple("Bob",   "works_at", "Acme")
+
+    triples = kg.match("Alice", "*", "*")
+    subjects = {t.subject for t in triples}
+    assert subjects == {"Alice"}
+    assert len(triples) == 2
+
+
+def test_kg_match_object_fixed(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "works_at", "Acme")
+    kg.add_triple("Bob",   "works_at", "Acme")
+    kg.add_triple("Carol", "works_at", "Beta")
+
+    triples = kg.match("*", "works_at", "Acme")
+    assert len(triples) == 2
+    subjects = {t.subject for t in triples}
+    assert "Alice" in subjects
+    assert "Bob"   in subjects
+    assert "Carol" not in subjects
+
+
+def test_kg_match_temporal_filter(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "role", "Engineer", valid_from="2020-01-01", valid_to="2022-12-31")
+    kg.add_triple("Alice", "role", "Manager",  valid_from="2023-01-01")
+
+    triples_2021 = kg.match("Alice", "role", "*", as_of="2021-06-01")
+    objs = {t.object for t in triples_2021}
+    assert "Engineer" in objs
+    assert "Manager" not in objs
+
+
+def test_kg_match_no_results(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "leads", "Platform")
+    triples = kg.match("Alice", "works_at", "*")
+    assert triples == []
+
+
+# -----------------------------------------------------------------------
+# Phase 7 — LinkPopularityRetriever
+# -----------------------------------------------------------------------
+
+def test_link_popularity_returns_linked_docs(tmp_path):
+    from locus.retrieval.link_popularity import LinkPopularityRetriever
+    corpus = Corpus(tmp_path / "corpus")
+
+    (tmp_path / "hub.md").write_text("# Hub\n\nEveryone references this document.")
+    (tmp_path / "leaf1.md").write_text("# Leaf 1\n\nSee [[hub]] for details.")
+    (tmp_path / "leaf2.md").write_text("# Leaf 2\n\nAlso references [[hub]] here.")
+
+    corpus.add_file(tmp_path / "hub.md",   base_path=tmp_path)
+    corpus.add_file(tmp_path / "leaf1.md", base_path=tmp_path)
+    corpus.add_file(tmp_path / "leaf2.md", base_path=tmp_path)
+
+    retriever = LinkPopularityRetriever(corpus)
+    results = retriever.search(limit=5)
+    assert len(results) >= 1
+    assert results[0].doc_path == "hub.md"
+    assert results[0].provenance == "link_pop"
+
+
+def test_link_popularity_empty_corpus(tmp_path):
+    from locus.retrieval.link_popularity import LinkPopularityRetriever
+    corpus = Corpus(tmp_path / "corpus")
+    retriever = LinkPopularityRetriever(corpus)
+    assert retriever.search() == []
+
+
+def test_link_popularity_no_links(tmp_path):
+    from locus.retrieval.link_popularity import LinkPopularityRetriever
+    corpus = Corpus(tmp_path / "corpus")
+    (tmp_path / "a.md").write_text("# A\n\nNo links here.")
+    corpus.add_file(tmp_path / "a.md", base_path=tmp_path)
+    retriever = LinkPopularityRetriever(corpus)
+    # No inbound links — should return empty (count=0 excluded)
+    results = retriever.search()
+    assert results == []
+
+
+def test_link_popularity_cache_invalidation(tmp_path):
+    from locus.retrieval.link_popularity import LinkPopularityRetriever
+    corpus = Corpus(tmp_path / "corpus")
+    retriever = LinkPopularityRetriever(corpus)
+
+    (tmp_path / "hub.md").write_text("# Hub\n\nReference target.")
+    corpus.add_file(tmp_path / "hub.md", base_path=tmp_path)
+    _ = retriever.search()                      # populates cache
+    assert retriever._cache_doc_count == 1
+
+    (tmp_path / "ref.md").write_text("# Ref\n\nSee [[hub]].")
+    corpus.add_file(tmp_path / "ref.md", base_path=tmp_path)
+    _ = retriever.search()                      # cache invalidated
+    assert retriever._cache_doc_count == 2
+
+
+# -----------------------------------------------------------------------
+# Phase 7 — LocusDoctor
+# -----------------------------------------------------------------------
+
+def test_doctor_empty_corpus_warns(tmp_path):
+    from locus import LocusDoctor
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    doctor = LocusDoctor(engine)
+    checks = doctor.run()
+    corpus_check = next(c for c in checks if c.name == "corpus")
+    assert corpus_check.status == "warn"
+
+
+def test_doctor_healthy_corpus(tmp_path):
+    from locus import LocusDoctor
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+    doctor = LocusDoctor(engine)
+    checks = doctor.run()
+    corpus_check = next(c for c in checks if c.name == "corpus")
+    assert corpus_check.status == "pass"
+
+
+def test_doctor_contradictions_warn(tmp_path):
+    from locus import LocusDoctor
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    for i in range(12):
+        engine.add_fact("X", "role", f"Role{i}")
+    doctor = LocusDoctor(engine)
+    checks = doctor.run()
+    kg_check = next(c for c in checks if c.name == "knowledge_graph")
+    assert kg_check.status == "warn"
+
+
+def test_doctor_report_string(tmp_path):
+    from locus import LocusDoctor
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    doctor = LocusDoctor(engine)
+    report = doctor.report()
+    assert "Locus Doctor" in report
+    assert "PASS" in report or "WARN" in report
+    assert "Result:" in report
+
+
+def test_doctor_to_dict(tmp_path):
+    from locus import LocusDoctor
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    d = LocusDoctor(engine).to_dict()
+    assert "checks" in d
+    assert "summary" in d
+    assert "pass" in d["summary"]
+
+
+# -----------------------------------------------------------------------
+# Phase 7 — KGExporter
+# -----------------------------------------------------------------------
+
+def test_export_graphml(tmp_path):
+    from locus import KGExporter, LocusEngine
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "leads", "Platform")
+    engine.add_fact("Bob",   "works_at", "Acme")
+
+    out = tmp_path / "kg.graphml"
+    count = KGExporter(engine.kg).to_graphml(out)
+    assert count == 2
+    content = out.read_text(encoding="utf-8")
+    assert "<graphml" in content
+    assert "Alice" in content
+    assert "leads" in content
+
+
+def test_export_jsonl(tmp_path):
+    from locus import KGExporter, LocusEngine
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "leads", "Platform")
+
+    out = tmp_path / "kg.jsonl"
+    count = KGExporter(engine.kg).to_jsonl(out)
+    assert count == 1
+    lines = out.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    obj = json.loads(lines[0])
+    assert obj["subject"] == "Alice"
+    assert obj["predicate"] == "leads"
+    assert obj["object"] == "Platform"
+
+
+def test_export_dot(tmp_path):
+    from locus import KGExporter, LocusEngine
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "leads", "Platform")
+
+    out = tmp_path / "kg.dot"
+    count = KGExporter(engine.kg).to_dot(out)
+    assert count >= 1
+    content = out.read_text(encoding="utf-8")
+    assert "digraph" in content
+    assert "Alice" in content
+
+
+def test_export_auto_format(tmp_path):
+    from locus import KGExporter, LocusEngine
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("A", "rel", "B")
+
+    for ext, check in [("graphml", "<graphml"), ("jsonl", '{"subject"'), ("dot", "digraph")]:
+        out = tmp_path / f"kg.{ext}"
+        KGExporter(engine.kg).export(out)
+        assert check in out.read_text(encoding="utf-8")
+
+
+# -----------------------------------------------------------------------
+# Phase 7 — Engine methods
+# -----------------------------------------------------------------------
+
+def test_engine_kg_traverse(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "leads",    "Platform")
+    engine.add_fact("Platform", "uses",  "Kubernetes")
+
+    result = engine.kg_traverse("Alice", max_depth=2)
+    assert "Alice" in result
+    assert "Platform" in result
+
+
+def test_engine_kg_match(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "leads", "Platform")
+    engine.add_fact("Bob",   "leads", "Infra")
+
+    result = engine.kg_match(predicate="leads")
+    assert result["count"] == 2
+
+
+def test_engine_doctor(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    d = engine.doctor()
+    assert "checks" in d
+    assert "summary" in d
+
+
+def test_engine_export_kg(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "leads", "Platform")
+    out = str(tmp_path / "output.jsonl")
+    result = engine.export_kg(out, fmt="jsonl")
+    assert result["triples_exported"] == 1
+
+
+def test_engine_six_signal_retrieve(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "hub.md").write_text("# Hub\n\nCentral reference document for the system.")
+    (tmp_path / "child.md").write_text("# Child\n\nSee [[hub]] for system details.")
+    engine.index(tmp_path)
+    chunks = engine.retrieve("system details", limit=5)
+    assert len(chunks) > 0
+    # link_pop provenance is possible if hub is referenced
+    provenances = {c.provenance for c in chunks}
+    assert len(provenances) >= 1

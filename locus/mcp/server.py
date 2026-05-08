@@ -153,6 +153,31 @@ def _call_tool(name: str, arguments: dict) -> dict:
         if name == "locus_suggest_aliases":
             return engine.suggest_aliases(threshold=float(arguments.get("threshold", 0.75)))
 
+        if name == "locus_kg_traverse":
+            return engine.kg_traverse(
+                start=arguments["start"],
+                max_depth=int(arguments.get("max_depth", 2)),
+                predicate_filter=arguments.get("predicate_filter"),
+                direction=arguments.get("direction", "both"),
+            )
+
+        if name == "locus_kg_match":
+            return engine.kg_match(
+                subject=arguments.get("subject", "*"),
+                predicate=arguments.get("predicate", "*"),
+                obj=arguments.get("obj", "*"),
+                as_of=arguments.get("as_of"),
+            )
+
+        if name == "locus_doctor":
+            return engine.doctor()
+
+        if name == "locus_export_kg":
+            return engine.export_kg(
+                path=arguments["path"],
+                fmt=arguments.get("format"),
+            )
+
         if name == "locus_ingest_ompa":
             from ..bridge.ompa import OMPABridge
             bridge = OMPABridge(engine, vault_path=arguments["vault_path"])

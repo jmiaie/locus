@@ -213,6 +213,109 @@ class TemporalKG:
         return self.populate_from_text(text, source=source, extract_prose=extract_prose)
 
     # ------------------------------------------------------------------
+    # Graph traversal & pattern match (Phase 7)
+    # ------------------------------------------------------------------
+
+    def traverse(
+        self,
+        start: str,
+        max_depth: int = 2,
+        predicate_filter: list[str] | None = None,
+        direction: str = "both",
+    ) -> dict[str, list[Triple]]:
+        """
+        BFS traversal from a starting entity.
+
+        Args:
+            start:            Starting entity name.
+            max_depth:        Maximum hops from start.
+            predicate_filter: If set, only follow these predicates.
+            direction:        "out" (subject→object), "in" (object→subject),
+                              or "both".
+
+        Returns:
+            {entity: [triples]} for every entity reachable within max_depth,
+            including the start entity itself.
+        """
+        start = self._resolve(start)
+        visited: dict[str, int] = {start: 0}
+        result: dict[str, list[Triple]] = {}
+        frontier = [start]
+
+        for depth in range(max_depth):
+            next_frontier: list[str] = []
+            for entity in frontier:
+                triples = self.query_entity(entity)
+                result[entity] = triples
+                for t in triples:
+                    if predicate_filter and t.predicate not in predicate_filter:
+                        continue
+                    candidates: list[str] = []
+                    if direction in ("out", "both") and t.subject == entity:
+                        candidates.append(t.object)
+                    if direction in ("in", "both") and t.object == entity:
+                        candidates.append(t.subject)
+                    for other in candidates:
+                        if other not in visited:
+                            visited[other] = depth + 1
+                            next_frontier.append(other)
+            frontier = next_frontier
+
+        # Collect remaining frontier entities (at max_depth but not expanded)
+        for entity in frontier:
+            if entity not in result:
+                result[entity] = self.query_entity(entity)
+
+        return result
+
+    def match(
+        self,
+        subject: str = "*",
+        predicate: str = "*",
+        obj: str = "*",
+        as_of: str = None,
+    ) -> list[Triple]:
+        """
+        Pattern match over the KG with wildcard support.
+        "*" matches any value for that position.
+
+        Examples:
+            kg.match("Alice", "*",        "*")      # all facts about Alice
+            kg.match("*",     "leads",    "*")      # all leadership facts
+            kg.match("*",     "works_at", "Acme")   # everyone at Acme
+            kg.match("Alice", "leads",    "*")      # what does Alice lead?
+        """
+        if subject != "*":
+            subject = self._resolve(subject)
+        if obj != "*":
+            obj = self._resolve(obj)
+
+        sql = (
+            "SELECT subject, predicate, object, valid_from, valid_to, source "
+            "FROM triples WHERE 1=1"
+        )
+        params: list = []
+        if subject != "*":
+            sql += " AND subject = ?"
+            params.append(subject)
+        if predicate != "*":
+            sql += " AND predicate = ?"
+            params.append(predicate)
+        if obj != "*":
+            sql += " AND object = ?"
+            params.append(obj)
+        if as_of:
+            sql += (
+                " AND (valid_from IS NULL OR valid_from <= ?)"
+                " AND (valid_to   IS NULL OR valid_to   >= ?)"
+            )
+            params += [as_of, as_of]
+
+        with self._conn() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [Triple(*row) for row in rows]
+
+    # ------------------------------------------------------------------
     # Contradiction detection
     # ------------------------------------------------------------------
 

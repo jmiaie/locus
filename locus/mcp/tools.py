@@ -206,6 +206,72 @@ TOOLS: dict[str, dict] = {
     # ------------------------------------------------------------------
     # Phase 6 — Watch, Bridge, Eval
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Phase 7 — KG traversal, doctor, export
+    # ------------------------------------------------------------------
+    "locus_kg_traverse": {
+        "description": (
+            "BFS traversal from a starting entity. Walks the KG graph up to max_depth hops, "
+            "optionally filtered by predicate or direction. Returns all reachable entities "
+            "and their facts."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start":            {"type": "string", "description": "Starting entity name."},
+                "max_depth":        {"type": "integer", "default": 2},
+                "predicate_filter": {"type": "array", "items": {"type": "string"}, "description": "Only follow these predicates."},
+                "direction":        {"type": "string", "enum": ["out", "in", "both"], "default": "both"},
+                "store_path":       {"type": "string", "default": ".locus"},
+            },
+            "required": ["start"],
+        },
+    },
+    "locus_kg_match": {
+        "description": (
+            "Pattern match over the KG with wildcard support. "
+            "'*' matches any value. "
+            "Examples: match('Alice','*','*') — all Alice facts; "
+            "match('*','leads','*') — all leadership; "
+            "match('*','works_at','Acme') — everyone at Acme."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subject":   {"type": "string", "default": "*"},
+                "predicate": {"type": "string", "default": "*"},
+                "obj":       {"type": "string", "default": "*", "description": "Object pattern ('*' for any)."},
+                "as_of":     {"type": "string", "description": "Temporal filter YYYY-MM-DD."},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+        },
+    },
+    "locus_doctor": {
+        "description": (
+            "Run a health check on the Locus store. Checks corpus integrity, KG population, "
+            "bulletin fill levels, entity resolver, store size, and version."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"store_path": {"type": "string", "default": ".locus"}},
+        },
+    },
+    "locus_export_kg": {
+        "description": (
+            "Export the knowledge graph to a file. "
+            "Formats: graphml (Gephi/Cytoscape), jsonl (scripting), dot (Graphviz). "
+            "Format is auto-detected from the file extension if not specified."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path":       {"type": "string", "description": "Output file path."},
+                "format":     {"type": "string", "enum": ["graphml", "jsonl", "dot"], "description": "Export format (auto from extension if omitted)."},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["path"],
+        },
+    },
     "locus_ingest_ompa": {
         "description": (
             "Import an OMPA vault into the Locus store. "
