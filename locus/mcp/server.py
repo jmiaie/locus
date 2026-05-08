@@ -4,10 +4,7 @@ JSON-RPC over stdin/stdout. Compatible with Claude Desktop, Cursor, Windsurf,
 and any MCP-compatible client.
 
 Usage:
-    # Claude Code / Desktop
-    claude mcp add locus -- python -m locus.mcp.server --store /path/to/.locus
-
-    # Or via the CLI
+    claude mcp add locus -- py -3 -m locus.mcp.server --store /path/to/.locus
     locus mcp --store /path/to/.locus
 """
 
@@ -56,10 +53,7 @@ def _call_tool(name: str, arguments: dict) -> dict:
         engine = _get_engine(store_path)
 
         if name == "locus_index":
-            return engine.index(
-                arguments["path"],
-                pattern=arguments.get("pattern", "**/*.md"),
-            )
+            return engine.index(arguments["path"], pattern=arguments.get("pattern", "**/*.md"))
 
         if name == "locus_retrieve":
             from ..retrieval.classifier import QueryIntent
@@ -105,9 +99,7 @@ def _call_tool(name: str, arguments: dict) -> dict:
             )
 
         if name == "locus_hot_context":
-            hot = engine.bulletin.inject(
-                token_limit=int(arguments.get("token_limit", 1500))
-            )
+            hot = engine.bulletin.inject(token_limit=int(arguments.get("token_limit", 1500)))
             return {"hot_context": hot or "(empty)"}
 
         if name == "locus_promote":
@@ -130,9 +122,20 @@ def _call_tool(name: str, arguments: dict) -> dict:
             return engine.kg.stats()
 
         if name == "locus_sync":
-            return engine.sync(
-                arguments["path"],
-                pattern=arguments.get("pattern", "**/*.md"),
+            return engine.sync(arguments["path"], pattern=arguments.get("pattern", "**/*.md"))
+
+        if name == "locus_contradictions":
+            return engine.find_contradictions(entity=arguments.get("entity"))
+
+        if name == "locus_add_alias":
+            return engine.add_alias(
+                alias=arguments["alias"],
+                canonical=arguments["canonical"],
+            )
+
+        if name == "locus_suggest_aliases":
+            return engine.suggest_aliases(
+                threshold=float(arguments.get("threshold", 0.75))
             )
 
         return {"error": f"Unhandled tool: {name}"}
@@ -174,14 +177,8 @@ def main(store_path: str = ".locus") -> None:
                         "serverInfo": {"name": "locus", "version": __version__},
                     },
                 })
-
             elif method == "tools/list":
-                _send({
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": _list_tools(),
-                })
-
+                _send({"jsonrpc": "2.0", "id": req_id, "result": _list_tools()})
             elif method == "tools/call":
                 result = _call_tool(
                     name=request["params"]["name"],
@@ -194,10 +191,8 @@ def main(store_path: str = ".locus") -> None:
                         "content": [{"type": "text", "text": json.dumps(result, indent=2)}]
                     },
                 })
-
             elif method in ("notifications/initialized",):
                 pass
-
             elif method in ("shutdown", "exit"):
                 break
 
@@ -213,6 +208,6 @@ def main(store_path: str = ".locus") -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Locus MCP server")
-    parser.add_argument("--store", default=".locus", help="Store path")
+    parser.add_argument("--store", default=".locus")
     args = parser.parse_args()
     main(store_path=args.store)

@@ -13,8 +13,12 @@ from locus.retrieval.fusion import rrf_fuse
 from locus.retrieval.kg_retrieval import KGRetriever, extract_query_entities
 from locus.retrieval.link_walker import LinkWalker
 from locus.retrieval.classifier import classify_query, QueryIntent, INTENT_WEIGHTS
+from locus.retrieval.structural import StructuralRetriever, _extract_date_range, _extract_tags, _extract_type
+from locus.retrieval.recency import RecencyRetriever
 from locus.context.bulletin import ContextBulletin, PROMOTE_THRESHOLD
 from locus.context.budget import ContextBudget, BudgetStatus
+from locus.memory.extractor import extract_triples_from_text, ProseTriple
+from locus.memory.entity_resolver import EntityResolver
 from locus.core import LocusEngine
 
 
@@ -659,8 +663,387 @@ def test_engine_retrieve_intent_override(tmp_path):
     engine = LocusEngine(store_path=tmp_path / ".locus")
     (tmp_path / "doc.md").write_text("Alice leads the infrastructure team at Acme Corp.")
     engine.index(tmp_path)
-    # Should not raise regardless of intent override
     chunks = engine.retrieve("Alice", intent=QueryIntent.KG_FIRST)
     assert isinstance(chunks, list)
     chunks2 = engine.retrieve("Alice", intent=QueryIntent.BM25_FIRST)
     assert isinstance(chunks2, list)
+
+
+# -----------------------------------------------------------------------
+# Phase 2 — Section-aware chunking
+# -----------------------------------------------------------------------
+
+def test_section_chunker_splits_at_headings():
+    from locus.memory.chunker import Chunker
+    chunker = Chunker(section_aware=True)
+    text = (
+        "# Introduction\n\nThis section introduces the system.\n\n"
+        "## Architecture\n\nThe architecture consists of three layers.\n\n"
+        "## Deployment\n\nDeployment is managed via Kubernetes."
+    )
+    chunks = chunker.chunk_text(text, source="doc.md")
+    assert len(chunks) == 3
+    sections = [c.metadata.get("section", "") for c in chunks]
+    assert "Introduction" in sections
+    assert "Architecture" in sections
+    assert "Deployment" in sections
+
+
+def test_section_chunker_preserves_heading_in_content():
+    from locus.memory.chunker import Chunker
+    chunker = Chunker(section_aware=True)
+    text = "## Auth System\n\nJWT tokens are validated on every request."
+    chunks = chunker.chunk_text(text, source="auth.md")
+    assert len(chunks) == 1
+    assert "Auth System" in chunks[0].content
+
+
+def test_section_chunker_falls_back_for_no_headings():
+    from locus.memory.chunker import Chunker
+    chunker = Chunker(section_aware=True, chunk_words=5, overlap_words=1)
+    words = ["alpha", "bravo", "charlie", "delta", "echo",
+             "foxtrot", "golf", "hotel", "india", "juliet",
+             "kilo", "lima", "mike", "november", "oscar"]
+    text = " ".join(words)
+    chunks = chunker.chunk_text(text, source="flat.md")
+    assert len(chunks) >= 2
+
+
+def test_section_chunker_splits_long_section():
+    from locus.memory.chunker import Chunker
+    chunker = Chunker(section_aware=True, chunk_words=5, overlap_words=1)
+    # One heading but content > chunk_words → falls back to word split inside
+    words = " ".join(["word"] * 20)
+    text = f"## Long Section\n\n{words}"
+    chunks = chunker.chunk_text(text, source="long.md")
+    assert len(chunks) >= 3
+
+
+def test_corpus_uses_section_aware_by_default(tmp_path):
+    corpus = Corpus(tmp_path / "corpus")
+    f = tmp_path / "sectioned.md"
+    f.write_text(
+        "# Overview\n\nSystem overview.\n\n"
+        "## Details\n\nDetailed technical information here.\n\n"
+        "## Deployment\n\nDeployment instructions for production."
+    )
+    added = corpus.add_file(f, base_path=tmp_path)
+    assert added == 3  # one chunk per section
+    chunks = corpus.get_chunks_for_doc("sectioned.md")
+    sections = [c.metadata.get("section") for c in chunks]
+    assert "Overview" in sections
+
+
+# -----------------------------------------------------------------------
+# Phase 2 — Structural retriever
+# -----------------------------------------------------------------------
+
+def test_structural_extract_date_range():
+    assert _extract_date_range("decisions from Q1 2025") == ("2025-01-01", "2025-03-31")
+    assert _extract_date_range("documents from 2024") == ("2024-01-01", "2024-12-31")
+    assert _extract_date_range("Q4 2023 review") == ("2023-10-01", "2023-12-31")
+    assert _extract_date_range("general query") is None
+
+
+def test_structural_extract_tags():
+    tags = _extract_tags("find #engineering documents tagged ops")
+    assert "engineering" in tags
+    assert "ops" in tags
+
+
+def test_structural_extract_type():
+    assert _extract_type("show me all meeting notes") == "meeting"
+    assert _extract_type("find ADR documents") == "adr"
+    assert _extract_type("random query") is None
+
+
+def test_structural_retriever_date_match(tmp_path):
+    corpus = Corpus(tmp_path / "corpus")
+    f = tmp_path / "q1_doc.md"
+    f.write_text("---\ndate: 2025-02-15\ntags: engineering\n---\nQ1 planning document.")
+    corpus.add_file(f, base_path=tmp_path)
+
+    retriever = StructuralRetriever(corpus)
+    results = retriever.search("decisions from Q1 2025")
+    assert len(results) == 1
+    assert results[0].provenance == "structural"
+
+
+def test_structural_retriever_tag_match(tmp_path):
+    corpus = Corpus(tmp_path / "corpus")
+    f = tmp_path / "infra.md"
+    f.write_text("---\ntags: ops, infrastructure\n---\nInfrastructure documentation.")
+    corpus.add_file(f, base_path=tmp_path)
+
+    retriever = StructuralRetriever(corpus)
+    results = retriever.search("tagged ops")
+    assert len(results) >= 1
+
+
+def test_structural_retriever_no_signals(tmp_path):
+    corpus = Corpus(tmp_path / "corpus")
+    f = tmp_path / "doc.md"
+    f.write_text("Some plain content with no dates or tags.")
+    corpus.add_file(f, base_path=tmp_path)
+
+    retriever = StructuralRetriever(corpus)
+    results = retriever.search("plain semantic query")
+    assert results == []  # no structural signals → empty
+
+
+# -----------------------------------------------------------------------
+# Phase 2 — Recency retriever
+# -----------------------------------------------------------------------
+
+def test_recency_retriever_returns_docs(tmp_path):
+    corpus = Corpus(tmp_path / "corpus")
+    for i in range(3):
+        f = tmp_path / f"doc{i}.md"
+        f.write_text(f"Document {i} content about various topics.")
+        corpus.add_file(f, base_path=tmp_path)
+
+    retriever = RecencyRetriever(corpus)
+    results = retriever.search(limit=10)
+    assert len(results) == 3
+    assert all(0 < r.score <= 1.0 for r in results)
+    assert all(r.provenance == "recency" for r in results)
+
+
+def test_recency_scores_decrease_with_age():
+    from locus.retrieval.recency import RecencyRetriever
+    from datetime import datetime, timezone, timedelta
+
+    r = RecencyRetriever.__new__(RecencyRetriever)
+    import math
+    r._decay = math.log(2) / 30.0
+    now = datetime.now(timezone.utc)
+
+    score_today = r._score(now.isoformat(), now)
+    score_old = r._score((now - timedelta(days=60)).isoformat(), now)
+    assert score_today > score_old
+    assert score_today > 0.99
+    assert score_old < 0.3
+
+
+# -----------------------------------------------------------------------
+# Phase 3 — Prose triple extractor
+# -----------------------------------------------------------------------
+
+def test_extractor_basic_relations():
+    triples = extract_triples_from_text(
+        "Alice leads the Infrastructure team. Bob works at Acme Corp."
+    )
+    predicates = {t.predicate for t in triples}
+    subjects = {t.subject for t in triples}
+    assert "leads" in predicates or "works_at" in predicates
+    assert "Alice" in subjects or "Bob" in subjects
+
+
+def test_extractor_filters_pronouns():
+    triples = extract_triples_from_text("It is responsible for the system.")
+    subjects = {t.subject for t in triples}
+    assert "It" not in subjects
+    assert "it" not in subjects
+
+
+def test_extractor_is_a():
+    triples = extract_triples_from_text("Locus is a vectorless RAG system.")
+    assert any(t.subject == "Locus" for t in triples)
+
+
+def test_extractor_part_of():
+    triples = extract_triples_from_text("AuthService is part of Platform.")
+    subj = {t.subject for t in triples}
+    assert "AuthService" in subj
+
+
+def test_extractor_caps_at_max(tmp_path):
+    from locus.memory.extractor import _MAX_TRIPLES
+    # Generate lots of matches
+    sentences = ". ".join([f"Alice{i} leads Team{i}" for i in range(100)])
+    triples = extract_triples_from_text(sentences)
+    assert len(triples) <= _MAX_TRIPLES
+
+
+def test_extractor_skips_long_sentences():
+    # A 50-word sentence should be skipped
+    long_sentence = " ".join(["word"] * 50) + "."
+    triples = extract_triples_from_text(long_sentence)
+    assert triples == []
+
+
+# -----------------------------------------------------------------------
+# Phase 3 — Entity resolver
+# -----------------------------------------------------------------------
+
+def test_resolver_add_and_resolve(tmp_path):
+    r = EntityResolver(tmp_path / "resolver.sqlite3")
+    r.add_alias("Jeff", "Jeff Milam")
+    assert r.resolve("Jeff") == "Jeff Milam"
+    assert r.resolve("Jeff Milam") == "Jeff Milam"  # canonical → itself
+    assert r.resolve("Unknown") == "Unknown"
+
+
+def test_resolver_cache(tmp_path):
+    r = EntityResolver(tmp_path / "resolver.sqlite3")
+    r.add_alias("jmiaie", "Jeff Milam")
+    # Second call should use cache
+    assert r.resolve("jmiaie") == "Jeff Milam"
+    assert "jmiaie" in r._cache
+
+
+def test_resolver_persist_across_instances(tmp_path):
+    db = tmp_path / "resolver.sqlite3"
+    r1 = EntityResolver(db)
+    r1.add_alias("OMPA", "OMPA Tool")
+
+    r2 = EntityResolver(db)
+    assert r2.resolve("OMPA") == "OMPA Tool"
+
+
+def test_resolver_suggest(tmp_path):
+    r = EntityResolver(tmp_path / "resolver.sqlite3")
+    entities = ["Jeff Milam", "Jeff", "Alice Smith", "Alice", "Bob"]
+    suggestions = r.suggest_aliases(entities, threshold=0.5)
+    pairs = [(s["entity_a"], s["entity_b"]) for s in suggestions]
+    # "Jeff Milam" and "Jeff" should be suggested
+    assert any("Jeff" in a and "Jeff" in b for a, b in pairs)
+
+
+def test_resolver_stats(tmp_path):
+    r = EntityResolver(tmp_path / "resolver.sqlite3")
+    r.add_alias("a", "A")
+    r.add_alias("b", "B")
+    assert r.stats()["alias_count"] == 2
+
+
+# -----------------------------------------------------------------------
+# Phase 3 — KG with prose extraction + contradictions
+# -----------------------------------------------------------------------
+
+def test_kg_prose_extraction(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    text = "Alice leads the Platform team. Bob works at Acme Corp."
+    count = kg.populate_from_text(text, source="org.md", extract_prose=True)
+    assert count >= 2
+    triples = kg.query_entity("Alice")
+    assert len(triples) >= 1
+
+
+def test_kg_no_prose_extraction(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    text = "Alice leads the Platform team. No wikilinks or tags here."
+    count = kg.populate_from_text(text, source="org.md", extract_prose=False)
+    assert count == 0  # only wikilinks/tags, which are absent
+
+
+def test_kg_find_contradictions_detects_conflict(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "role", "Engineer", source="a.md")
+    kg.add_triple("Alice", "role", "Manager", source="b.md")
+    contradictions = kg.find_contradictions("Alice")
+    assert len(contradictions) == 1
+    assert contradictions[0]["subject"] == "Alice"
+    assert contradictions[0]["predicate"] == "role"
+
+
+def test_kg_find_contradictions_no_overlap(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    # Non-overlapping time windows — NOT a contradiction
+    kg.add_triple("Alice", "role", "Engineer", valid_from="2020-01-01", valid_to="2022-12-31")
+    kg.add_triple("Alice", "role", "Manager", valid_from="2023-01-01", valid_to="2025-12-31")
+    contradictions = kg.find_contradictions("Alice")
+    assert len(contradictions) == 0
+
+
+def test_kg_all_entities(tmp_path):
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("Alice", "knows", "Bob")
+    kg.add_triple("Bob", "works_at", "Acme")
+    entities = kg.all_entities()
+    assert "Alice" in entities
+    assert "Bob" in entities
+    assert "Acme" in entities
+
+
+def test_kg_resolver_transparent(tmp_path):
+    resolver = EntityResolver(str(tmp_path / "resolver.sqlite3"))
+    resolver.add_alias("Jeff", "Jeff Milam")
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"), resolver=resolver)
+    kg.add_triple("Jeff", "leads", "Platform")
+    # Querying by canonical should find it
+    triples = kg.query_entity("Jeff Milam")
+    assert len(triples) >= 1
+    assert triples[0].subject == "Jeff Milam"
+
+
+# -----------------------------------------------------------------------
+# Phase 2/3 — Engine integration
+# -----------------------------------------------------------------------
+
+def test_engine_five_signal_retrieve(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text(
+        "---\ndate: 2025-01-15\ntags: security\n---\n"
+        "# Authentication\n\n"
+        "JWT tokens are used for authentication. Alice leads the Auth team."
+    )
+    (tmp_path / "deploy.md").write_text(
+        "# Deployment\n\nKubernetes manages container orchestration."
+    )
+    engine.index(tmp_path)
+    chunks = engine.retrieve("authentication security", limit=5)
+    assert len(chunks) > 0
+    # auth.md is the relevant doc — it should appear in results
+    doc_paths = {c.doc_path for c in chunks}
+    assert any("auth" in p for p in doc_paths)
+
+
+def test_engine_structural_via_retrieve(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "q1_notes.md").write_text(
+        "---\ndate: 2025-02-10\ntags: meeting\n---\n"
+        "Q1 planning meeting notes."
+    )
+    engine.index(tmp_path)
+    chunks = engine.retrieve("Q1 2025 meeting")
+    assert len(chunks) > 0
+    assert any(c.provenance == "structural" for c in chunks)
+
+
+def test_engine_find_contradictions(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "role", "Engineer", source="hr.md")
+    engine.add_fact("Alice", "role", "Manager", source="org.md")
+    result = engine.find_contradictions("Alice")
+    assert result["contradiction_count"] == 1
+
+
+def test_engine_add_alias_and_resolve(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_alias("Jeff", "Jeff Milam")
+    engine.add_fact("Jeff", "leads", "Platform")
+    facts = engine.query_entity("Jeff Milam")
+    assert len(facts["facts"]) >= 1
+
+
+def test_engine_suggest_aliases(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Jeff Milam", "leads", "Platform")
+    engine.add_fact("Jeff", "works_at", "Acme")
+    result = engine.suggest_aliases(threshold=0.5)
+    assert "suggestions" in result
+    assert "entity_count" in result
+
+
+def test_engine_status_includes_resolver(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    status = engine.status()
+    assert "resolver" in status
+    assert "alias_count" in status["resolver"]
+
+
+def test_engine_session_start_includes_resolver(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    start = engine.session_start()
+    assert "resolver" in start

@@ -1,5 +1,9 @@
 """
 Corpus — SQLite-backed document store with inverted term index for BM25.
+
+Phase 2 additions:
+  - section_aware parameter passed through to Chunker
+  - Migration-safe schema (adds columns to existing dbs)
 """
 
 import hashlib
@@ -58,12 +62,11 @@ class Corpus:
     );
     """
 
-    def __init__(self, store_path: Path):
+    def __init__(self, store_path: Path, section_aware: bool = True):
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.store_path / "corpus.sqlite3")
-        self._chunker = Chunker()
-        # In-process stats cache — invalidated on add/remove
+        self._chunker = Chunker(section_aware=section_aware)
         self._N_cache: Optional[int] = None
         self._avgdl_cache: Optional[float] = None
         self._init_db()
@@ -71,8 +74,11 @@ class Corpus:
     def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(self._SCHEMA)
-            # Migration: add checksum column if corpus pre-dates Phase 1
-            cols = {row[1] for row in conn.execute("PRAGMA table_info(doc_stats)").fetchall()}
+            # Migration: add checksum column if missing (pre-Phase-1 corpus)
+            cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(doc_stats)").fetchall()
+            }
             if "checksum" not in cols:
                 conn.execute("ALTER TABLE doc_stats ADD COLUMN checksum TEXT")
 
@@ -89,9 +95,7 @@ class Corpus:
 
     @staticmethod
     def _file_checksum(path: Path) -> str:
-        h = hashlib.sha256()
-        h.update(path.read_bytes())
-        return h.hexdigest()
+        return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _stored_checksum(self, doc_path: str) -> Optional[str]:
         with self._conn() as conn:
@@ -103,22 +107,20 @@ class Corpus:
     def add_file(self, path: Path, base_path: Path = None, force: bool = False) -> int:
         """
         Index a file. Returns number of chunks added.
-        Returns 0 (skips) if the file is unchanged since last index, unless force=True.
+        Skips unchanged files (checksum dedup) unless force=True.
         """
         chunks = self._chunker.chunk_file(path, base_path=base_path)
         if not chunks:
             return 0
         doc_id = chunks[0].doc_path
 
-        # Checksum dedup — skip unchanged files
         if not force:
             try:
                 checksum = self._file_checksum(path)
                 if checksum == self._stored_checksum(doc_id):
-                    logger.debug("Skipping unchanged file: %s", doc_id)
                     return 0
             except Exception:
-                pass  # if checksum fails, proceed with indexing
+                pass
 
         self._remove_doc(doc_id)
         for chunk in chunks:
@@ -255,7 +257,9 @@ class Corpus:
     def doc_count(self) -> int:
         if self._N_cache is None:
             with self._conn() as conn:
-                self._N_cache = conn.execute("SELECT COUNT(*) FROM doc_stats").fetchone()[0]
+                self._N_cache = conn.execute(
+                    "SELECT COUNT(*) FROM doc_stats"
+                ).fetchone()[0]
         return self._N_cache
 
     def chunk_count(self) -> int:
@@ -265,7 +269,9 @@ class Corpus:
     def avg_doc_length(self) -> float:
         if self._avgdl_cache is None:
             with self._conn() as conn:
-                result = conn.execute("SELECT AVG(word_count) FROM doc_stats").fetchone()[0]
+                result = conn.execute(
+                    "SELECT AVG(word_count) FROM doc_stats"
+                ).fetchone()[0]
             self._avgdl_cache = result or 0.0
         return self._avgdl_cache
 

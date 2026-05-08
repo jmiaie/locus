@@ -1,17 +1,22 @@
 """
 LocusEngine — main orchestrator for Locus vectorless RAG.
 
-Three-signal retrieval pipeline, no embeddings required:
-  1. BM25     — probabilistic keyword retrieval
-  2. KG       — entity expansion via temporal knowledge graph
-  3. LinkWalk — wikilink/citation graph traversal from top BM25 hits
+Five-signal retrieval pipeline, no embeddings required:
+  1. BM25        — probabilistic keyword retrieval
+  2. KG          — entity expansion via temporal knowledge graph
+  3. LinkWalk    — wikilink/citation graph traversal from top BM25 hits
+  4. Structural  — frontmatter date / tag / type matching (Phase 2)
+  5. Recency     — exponential freshness prior (Phase 2)
 
-Signals are fused via weighted Reciprocal Rank Fusion. Query intent
-(KG-first / BM25-first / balanced) is classified automatically and used
-to set the RRF weights per query.
+Signals 1-3 are weighted by query intent (KG-first / BM25-first / balanced).
+Signals 4-5 use fixed weights (structural=1.0, recency=0.3).
+All five are fused via weighted Reciprocal Rank Fusion.
 
-Tiered bulletin tracks hot context across rounds (persisted to SQLite).
-Token budget monitors context injection cost softly.
+Phase 3 additions:
+  - EntityResolver for transparent alias de-duplication in the KG
+  - Prose triple extraction from natural language text
+  - Contradiction detection across KG triples
+  - alias management API (add_alias, suggest_aliases)
 """
 
 import logging
@@ -19,9 +24,12 @@ from pathlib import Path
 
 from .memory.corpus import Corpus
 from .memory.knowledge_graph import TemporalKG
+from .memory.entity_resolver import EntityResolver
 from .retrieval.bm25 import BM25Retriever, ScoredChunk
 from .retrieval.kg_retrieval import KGRetriever
 from .retrieval.link_walker import LinkWalker
+from .retrieval.structural import StructuralRetriever
+from .retrieval.recency import RecencyRetriever
 from .retrieval.fusion import rrf_fuse
 from .retrieval.classifier import classify_query, INTENT_WEIGHTS, QueryIntent
 from .context.bulletin import ContextBulletin
@@ -29,7 +37,11 @@ from .context.budget import ContextBudget
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
+
+# Fixed weights appended after intent weights: [structural, recency]
+_STRUCTURAL_WEIGHT = 1.0
+_RECENCY_WEIGHT = 0.3
 
 
 class LocusEngine:
@@ -47,17 +59,23 @@ class LocusEngine:
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
 
-        self.corpus = Corpus(self.store_path / "corpus")
-        self.kg = TemporalKG(str(self.store_path / "kg.sqlite3"))
+        # Phase 3: entity resolver (must come before KG)
+        self.resolver = EntityResolver(self.store_path / "resolver.sqlite3")
+
+        self.corpus = Corpus(self.store_path / "corpus", section_aware=True)
+        self.kg = TemporalKG(str(self.store_path / "kg.sqlite3"), resolver=self.resolver)
         self.bulletin = ContextBulletin(
             archive_path=self.store_path / "archive",
             db_path=self.store_path / "bulletin.sqlite3",
         )
         self.budget = ContextBudget()
 
+        # Retrieval signals
         self._bm25 = BM25Retriever(self.corpus)
         self._kg_ret = KGRetriever(self.kg, self.corpus)
         self._walker = LinkWalker(self.corpus)
+        self._structural = StructuralRetriever(self.corpus)   # Phase 2
+        self._recency = RecencyRetriever(self.corpus)          # Phase 2
 
     # ------------------------------------------------------------------
     # Indexing
@@ -66,7 +84,8 @@ class LocusEngine:
     def index(self, path: str | Path, pattern: str = "**/*.md") -> dict:
         """
         Index a file or directory.
-        Skips files whose content is unchanged since last index (checksum dedup).
+        Skips unchanged files (checksum dedup). Extracts KG triples from
+        wikilinks, tags, and prose sentences.
         Returns counts of files, chunks added, and KG triples extracted.
         """
         path = Path(path)
@@ -88,12 +107,10 @@ class LocusEngine:
         }
 
     def forget(self, doc_path: str) -> dict:
-        """Remove a document from the corpus."""
         removed = self.corpus.remove_file(doc_path)
         return {"removed_chunks": removed, "doc": doc_path}
 
     def sync(self, path: str | Path, pattern: str = "**/*.md") -> dict:
-        """Full reindex: wipe corpus and rebuild from path."""
         for doc in self.corpus.list_docs():
             self.corpus.remove_file(doc)
         return self.index(path, pattern=pattern)
@@ -111,27 +128,33 @@ class LocusEngine:
         intent: QueryIntent = None,
     ) -> list[ScoredChunk]:
         """
-        Main retrieval: BM25 + KG entity expansion + link walk, fused via weighted RRF.
+        Five-signal retrieval: BM25 + KG + link walk + structural + recency.
 
-        Query intent is auto-classified unless overridden:
-          - KG-first:   factual/entity queries — boosts KG signal (weight 2x)
-          - BM25-first: procedural/narrative — boosts BM25 signal (weight 2x)
-          - Balanced:   equal weights
+        Query intent auto-classified unless overridden:
+          - KG-first:   entity/factual queries (e.g. "who is Alice?")
+          - BM25-first: procedural/narrative (e.g. "how does auth work?")
+          - Balanced:   default
 
-        Each returned chunk carries a provenance tag (bm25 / kg / link:hopN).
+        Structural signal activates only when the query contains date,
+        tag, or doc-type references. Recency is always a soft prior.
         """
         if intent is None:
             intent = classify_query(query)
 
         bm25_hits = self._bm25.search(query, limit=limit * 2)
         kg_hits = self._kg_ret.search(query, limit=limit * 2, as_of=as_of)
+        link_hits = self._walker.walk(bm25_hits[:3], depth=2, limit=limit) if use_links and bm25_hits else []
+        structural_hits = self._structural.search(query, limit=limit * 2)
+        recency_hits = self._recency.search(limit=limit * 2)
 
-        link_hits: list[ScoredChunk] = []
-        if use_links and bm25_hits:
-            link_hits = self._walker.walk(bm25_hits[:3], depth=2, limit=limit)
+        intent_weights = INTENT_WEIGHTS[intent]  # [bm25, kg, link]
+        all_weights = [*intent_weights, _STRUCTURAL_WEIGHT, _RECENCY_WEIGHT]
 
-        weights = INTENT_WEIGHTS[intent]
-        fused = rrf_fuse([bm25_hits, kg_hits, link_hits], weights=weights, limit=limit)
+        fused = rrf_fuse(
+            [bm25_hits, kg_hits, link_hits, structural_hits, recency_hits],
+            weights=all_weights,
+            limit=limit,
+        )
 
         total_tokens = 0
         for chunk in fused:
@@ -146,14 +169,13 @@ class LocusEngine:
 
         check = self.budget.record(total_tokens)
         if check.status.value in ("critical", "warning", "trend"):
-            logger.warning("Budget alert [%s]: %s", intent.value, check.message)
+            logger.warning("Budget [%s]: %s", intent.value, check.message)
 
         return fused
 
     def format_context(
         self, chunks: list[ScoredChunk], include_hot: bool = True
     ) -> str:
-        """Format retrieved chunks as a context block ready for prompt injection."""
         parts: list[str] = []
         if include_hot:
             hot = self.bulletin.inject(token_limit=800)
@@ -162,6 +184,7 @@ class LocusEngine:
         if chunks:
             parts.append("## Retrieved Context")
             for i, chunk in enumerate(chunks, 1):
+                section = chunk.content.splitlines()[0][:60] if chunk.content else ""
                 parts.append(
                     f"### [{i}] {chunk.doc_path}  (via {chunk.provenance})\n{chunk.content}"
                 )
@@ -204,20 +227,57 @@ class LocusEngine:
         }
 
     # ------------------------------------------------------------------
+    # Phase 3 — Entity resolution
+    # ------------------------------------------------------------------
+
+    def add_alias(self, alias: str, canonical: str) -> dict:
+        """Register alias → canonical so both resolve to the same KG entity."""
+        self.resolver.add_alias(alias, canonical)
+        return {"alias": alias, "canonical": canonical}
+
+    def suggest_aliases(self, threshold: float = 0.75) -> dict:
+        """Suggest entity name pairs that may refer to the same entity."""
+        entities = self.kg.all_entities()
+        suggestions = self.resolver.suggest_aliases(entities, threshold=threshold)
+        return {
+            "entity_count": len(entities),
+            "suggestions": suggestions,
+            "threshold": threshold,
+        }
+
+    def list_aliases(self) -> dict:
+        return {"aliases": self.resolver.list_aliases()}
+
+    # ------------------------------------------------------------------
+    # Phase 3 — Contradiction detection
+    # ------------------------------------------------------------------
+
+    def find_contradictions(self, entity: str = None) -> dict:
+        """
+        Find KG triples that contradict each other:
+        same subject+predicate, different objects, overlapping validity windows.
+        """
+        contradictions = self.kg.find_contradictions(entity)
+        return {
+            "entity": entity,
+            "contradiction_count": len(contradictions),
+            "contradictions": contradictions,
+        }
+
+    # ------------------------------------------------------------------
     # Session lifecycle
     # ------------------------------------------------------------------
 
     def session_start(self) -> dict:
-        """Warm context open: corpus stats + KG stats + hot-tier bulletin."""
         return {
             "corpus": self.corpus.stats(),
             "kg": self.kg.stats(),
             "bulletin": self.bulletin.stats(),
+            "resolver": self.resolver.stats(),
             "hot_context": self.bulletin.inject(token_limit=800) or "(empty — run locus_index first)",
         }
 
     def wrap_up(self) -> dict:
-        """Session close: tick bulletin decay, return summary."""
         archived = self.bulletin.tick()
         return {
             "archived_entries": archived,
@@ -232,4 +292,5 @@ class LocusEngine:
             "kg": self.kg.stats(),
             "bulletin": self.bulletin.stats(),
             "budget": self.budget.stats(),
+            "resolver": self.resolver.stats(),
         }

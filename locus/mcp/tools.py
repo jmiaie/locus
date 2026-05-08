@@ -1,18 +1,19 @@
 """
-Locus MCP tool definitions — 12 tools for vectorless RAG over MCP.
+Locus MCP tool definitions — 15 tools for vectorless RAG over MCP.
 """
 
 TOOLS: dict[str, dict] = {
     "locus_index": {
         "description": (
-            "Index a file or directory into Locus. Builds the BM25 inverted index "
-            "and extracts KG triples from wikilinks and tags. Run this first."
+            "Index a file or directory into Locus. Builds the BM25 inverted index, "
+            "extracts KG triples from wikilinks, tags, and prose sentences. "
+            "Skips unchanged files automatically (checksum dedup). Run this first."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "File or directory path to index."},
-                "pattern": {"type": "string", "default": "**/*.md", "description": "Glob pattern for directory indexing."},
+                "pattern": {"type": "string", "default": "**/*.md"},
                 "store_path": {"type": "string", "default": ".locus"},
             },
             "required": ["path"],
@@ -20,18 +21,19 @@ TOOLS: dict[str, dict] = {
     },
     "locus_retrieve": {
         "description": (
-            "Retrieve context for a query using BM25 + KG entity expansion + link walking, "
-            "fused via Reciprocal Rank Fusion. Returns ranked chunks with provenance tags "
-            "(bm25 / kg / link:hopN) so you can see why each result was returned."
+            "Five-signal retrieval: BM25 + KG entity expansion + link walking + "
+            "frontmatter structural matching + recency prior, fused via weighted RRF. "
+            "Query intent is auto-classified (KG-first / BM25-first / balanced). "
+            "Each result carries a provenance tag explaining why it was returned."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Natural language query."},
-                "limit": {"type": "integer", "default": 5, "description": "Max chunks to return."},
-                "as_of": {"type": "string", "description": "Temporal filter — only facts valid on this date (YYYY-MM-DD)."},
-                "use_links": {"type": "boolean", "default": True, "description": "Follow wikilinks from top hits."},
-                "full_content": {"type": "boolean", "default": False, "description": "Return full chunk content instead of truncating at 600 chars."},
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "default": 5},
+                "as_of": {"type": "string", "description": "Temporal filter (YYYY-MM-DD)."},
+                "use_links": {"type": "boolean", "default": True},
+                "full_content": {"type": "boolean", "default": False, "description": "Return full chunk text instead of truncating at 600 chars."},
                 "intent": {"type": "string", "enum": ["kg_first", "bm25_first", "balanced"], "description": "Override auto-detected query intent."},
                 "store_path": {"type": "string", "default": ".locus"},
             },
@@ -39,44 +41,35 @@ TOOLS: dict[str, dict] = {
         },
     },
     "locus_add_fact": {
-        "description": (
-            "Add a temporal fact (subject–predicate–object triple) to the Locus knowledge graph. "
-            "Optionally scoped with valid_from / valid_to dates for point-in-time queries."
-        ),
+        "description": "Add a temporal fact (subject–predicate–object) to the knowledge graph.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "subject": {"type": "string"},
                 "predicate": {"type": "string"},
                 "object": {"type": "string"},
-                "valid_from": {"type": "string", "description": "Start date YYYY-MM-DD."},
-                "valid_to": {"type": "string", "description": "End date YYYY-MM-DD."},
-                "source": {"type": "string", "description": "Source document path."},
+                "valid_from": {"type": "string"},
+                "valid_to": {"type": "string"},
+                "source": {"type": "string"},
                 "store_path": {"type": "string", "default": ".locus"},
             },
             "required": ["subject", "predicate", "object"],
         },
     },
     "locus_query_entity": {
-        "description": (
-            "Query all knowledge graph facts about an entity. "
-            "Supports temporal filter via as_of to ask 'what was true on date X?'."
-        ),
+        "description": "Query all KG facts about an entity. Supports temporal filter via as_of.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "entity": {"type": "string"},
-                "as_of": {"type": "string", "description": "Historical date (YYYY-MM-DD)."},
+                "as_of": {"type": "string"},
                 "store_path": {"type": "string", "default": ".locus"},
             },
             "required": ["entity"],
         },
     },
     "locus_hot_context": {
-        "description": (
-            "Return the current hot-tier bulletin board — frequently retrieved chunks "
-            "and pinned context. Useful for always-on background knowledge."
-        ),
+        "description": "Return the hot-tier bulletin board — frequently retrieved and pinned context.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -97,10 +90,7 @@ TOOLS: dict[str, dict] = {
         },
     },
     "locus_session_start": {
-        "description": (
-            "Warm context open: corpus stats, KG stats, and hot-tier content. "
-            "Run at the start of a session to orient the agent (~1K tokens)."
-        ),
+        "description": "Warm context open: corpus + KG + bulletin + resolver stats, hot-tier content.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -118,7 +108,7 @@ TOOLS: dict[str, dict] = {
         },
     },
     "locus_status": {
-        "description": "Full status: corpus stats, KG stats, bulletin tiers, token budget.",
+        "description": "Full status: corpus, KG, bulletin, budget, entity resolver.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -127,18 +117,18 @@ TOOLS: dict[str, dict] = {
         },
     },
     "locus_forget": {
-        "description": "Remove a document from the Locus corpus by its indexed path.",
+        "description": "Remove a document from the Locus corpus.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "doc_path": {"type": "string", "description": "Document path as indexed (relative path)."},
+                "doc_path": {"type": "string"},
                 "store_path": {"type": "string", "default": ".locus"},
             },
             "required": ["doc_path"],
         },
     },
     "locus_kg_stats": {
-        "description": "Knowledge graph statistics: triple count, entity count, source count.",
+        "description": "Knowledge graph statistics.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -151,11 +141,52 @@ TOOLS: dict[str, dict] = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Root directory to reindex."},
+                "path": {"type": "string"},
                 "pattern": {"type": "string", "default": "**/*.md"},
                 "store_path": {"type": "string", "default": ".locus"},
             },
             "required": ["path"],
+        },
+    },
+    "locus_contradictions": {
+        "description": (
+            "Find contradicting KG triples: same subject+predicate, different objects, "
+            "overlapping validity windows. Scope to a specific entity or scan all."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity": {"type": "string", "description": "Optional entity to scope the search."},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+        },
+    },
+    "locus_add_alias": {
+        "description": (
+            "Register an entity alias so variant names resolve to the same canonical entity. "
+            "e.g. alias='Jeff', canonical='Jeff Milam'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "alias": {"type": "string"},
+                "canonical": {"type": "string"},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["alias", "canonical"],
+        },
+    },
+    "locus_suggest_aliases": {
+        "description": (
+            "Suggest entity pairs that may refer to the same thing, based on name similarity. "
+            "Returns candidates for human review — use locus_add_alias to confirm."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "threshold": {"type": "number", "default": 0.75, "description": "Similarity threshold (0–1)."},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
         },
     },
 }
