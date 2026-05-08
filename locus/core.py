@@ -39,10 +39,11 @@ from .context.bulletin import ContextBulletin
 from .context.budget import ContextBudget
 from .hooks import LocusHooks
 from .reasoning import LocusReasoner
+from .query_expander import QueryExpander
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 # Fixed weights appended after intent weights: [structural, recency]
 _STRUCTURAL_WEIGHT  = 1.0
@@ -89,6 +90,7 @@ class LocusEngine:
         self._packer = ContextPacker()                            # Phase 8
         self._hooks = LocusHooks()                                # Phase 9
         self._reasoner = LocusReasoner(self.kg)                   # Phase 9
+        self._expander = QueryExpander(self.kg, self.resolver)    # Phase 10
 
         # Query result cache — invalidated on corpus changes
         self._query_cache: dict[str, list[ScoredChunk]] = {}
@@ -646,6 +648,66 @@ class LocusEngine:
     def top_terms(self, limit: int = 20) -> list[dict]:
         """Return the corpus-wide top terms by document frequency."""
         return self.corpus.top_terms(limit=limit)
+
+    # ------------------------------------------------------------------
+    # Phase 10 — Query intelligence + snapshot
+    # ------------------------------------------------------------------
+
+    def expand_query(self, query: str, max_expansions: int = 5) -> dict:
+        """Expand *query* using KG alias resolution and first-hop neighbours.
+
+        Returns the enriched query string plus metadata about what was added.
+        """
+        return self._expander.expand(query, max_expansions=max_expansions).to_dict()
+
+    def multi_retrieve(
+        self,
+        queries: list[str],
+        limit: int = 5,
+        as_of: str = None,
+        use_links: bool = True,
+    ) -> list[ScoredChunk]:
+        """Run each query independently and fuse all result lists via RRF.
+
+        Useful for query reformulation, typo variants, or multi-intent queries.
+        """
+        if not queries:
+            return []
+        all_lists = [
+            self.retrieve(q, limit=limit * 2, as_of=as_of, use_links=use_links)
+            for q in queries
+        ]
+        return rrf_fuse(all_lists, limit=limit)
+
+    def timeline(self, entity: str, as_of: str = None) -> dict:
+        """Return all KG facts for *entity* sorted chronologically by valid_from.
+
+        Facts without a valid_from date are listed last.
+        """
+        triples = self.kg.query_entity(entity, as_of=as_of)
+        sorted_triples = sorted(
+            triples,
+            key=lambda t: (t.valid_from or "9999-99-99", t.predicate),
+        )
+        return {
+            "entity": entity,
+            "event_count": len(sorted_triples),
+            "timeline": [
+                {
+                    "date": t.valid_from,
+                    "valid_to": t.valid_to,
+                    "predicate": t.predicate,
+                    "object": t.object,
+                    "source": t.source,
+                }
+                for t in sorted_triples
+            ],
+        }
+
+    def snapshot(self, output_path: str) -> dict:
+        """Archive this store to a portable .tar.gz file."""
+        from .snapshot import LocusSnapshot
+        return LocusSnapshot.save(self, output_path)
 
     def session_start(self) -> dict:
         return {

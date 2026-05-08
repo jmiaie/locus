@@ -240,6 +240,55 @@ def _call_tool(name: str, arguments: dict) -> dict:
                 pattern=arguments.get("pattern", "*.md"),
             )
 
+        # Phase 10 — query intelligence + snapshot
+        if name == "locus_expand_query":
+            return engine.expand_query(
+                query=arguments["query"],
+                max_expansions=int(arguments.get("max_expansions", 5)),
+            )
+
+        if name == "locus_multi_retrieve":
+            queries = arguments["queries"]
+            chunks = engine.multi_retrieve(
+                queries=queries,
+                limit=min(int(arguments.get("limit", 5)), 20),
+                as_of=arguments.get("as_of"),
+            )
+            return {
+                "queries": queries,
+                "results": [
+                    {
+                        "chunk_id": c.chunk_id,
+                        "doc_path": c.doc_path,
+                        "score": round(c.score, 4),
+                        "provenance": c.provenance,
+                        "content": c.content[:600],
+                    }
+                    for c in chunks
+                ],
+            }
+
+        if name == "locus_timeline":
+            return engine.timeline(
+                entity=arguments["entity"],
+                as_of=arguments.get("as_of"),
+            )
+
+        if name == "locus_snapshot":
+            return engine.snapshot(arguments["output_path"])
+
+        if name == "locus_restore":
+            from ..snapshot import LocusSnapshot
+            return LocusSnapshot.load(
+                snapshot_path=arguments["snapshot_path"],
+                store_path=arguments.get("store_path", ".locus-restored"),
+                overwrite=bool(arguments.get("overwrite", False)),
+            )
+
+        if name == "locus_snapshot_info":
+            from ..snapshot import LocusSnapshot
+            return LocusSnapshot.inspect(arguments["snapshot_path"])
+
         return {"error": f"Unhandled tool: {name}"}
 
     except KeyError as e:

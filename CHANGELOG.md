@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.0] — 2026-05-08
+
+### Added
+- **`QueryExpander`** — KG-backed query enrichment; resolves alias tokens in the query to their canonical names and appends first-hop KG neighbours as additional search terms; zero-cost when KG is empty
+- **`LocusSnapshot`** — portable save/restore for a full Locus store; `save()` packs the store to a `.tar.gz` archive; `load()` extracts to any target path with optional overwrite; `inspect()` shows the manifest without extracting; path-traversal-safe
+- **`engine.expand_query(query, max_expansions)`** — surface method for `QueryExpander`
+- **`engine.multi_retrieve(queries, limit, as_of)`** — run N query variants through the full six-signal pipeline and fuse all result lists via RRF; deduplicates by `chunk_id`
+- **`engine.timeline(entity, as_of)`** — chronological KG view of any entity; facts sorted by `valid_from`; undated facts last; temporal filter supported
+- **`engine.snapshot(output_path)`** — convenience wrapper for `LocusSnapshot.save()`
+- New CLI commands: `expand`, `multi-retrieve`, `timeline`, `snapshot`, `restore`, `snapshot-info`
+- 6 new MCP tools (40 total): `locus_expand_query`, `locus_multi_retrieve`, `locus_timeline`, `locus_snapshot`, `locus_restore`, `locus_snapshot_info`
+- `QueryExpander`, `ExpansionResult`, `LocusSnapshot` exported from top-level `locus` package
+- 20 new tests (227 total, all passing)
+
+### Changed
+- `__version__` bumped to `0.9.0`
+- `pyproject.toml` version updated to `0.9.0`
+
+---
+
 ## [0.8.0] — 2026-05-08
 
 ### Added

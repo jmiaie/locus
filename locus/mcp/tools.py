@@ -484,4 +484,98 @@ TOOLS: dict[str, dict] = {
             "required": ["repo"],
         },
     },
+    # ------------------------------------------------------------------
+    # Phase 10 — Query intelligence + snapshot
+    # ------------------------------------------------------------------
+    "locus_expand_query": {
+        "description": (
+            "Expand a query using KG alias resolution and first-hop neighbours. "
+            "If query terms match known entity aliases, their canonical names and "
+            "related entities are appended to produce a richer query string. "
+            "Returns original, expanded, added_terms, and entity_matches."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query":          {"type": "string"},
+                "max_expansions": {"type": "integer", "default": 5},
+                "store_path":     {"type": "string", "default": ".locus"},
+            },
+            "required": ["query"],
+        },
+    },
+    "locus_multi_retrieve": {
+        "description": (
+            "Run multiple query variants and fuse results via Reciprocal Rank Fusion. "
+            "Ideal for query reformulation, typo tolerance, or multi-intent queries. "
+            "Each query runs through the full six-signal pipeline independently."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "queries":    {"type": "array", "items": {"type": "string"}, "description": "List of query variants."},
+                "limit":      {"type": "integer", "default": 5},
+                "as_of":      {"type": "string", "description": "Temporal filter YYYY-MM-DD."},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["queries"],
+        },
+    },
+    "locus_timeline": {
+        "description": (
+            "Show a chronological timeline of all KG facts for an entity. "
+            "Facts are sorted by valid_from date; undated facts appear last. "
+            "Useful for tracking how knowledge about an entity evolved over time."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity":     {"type": "string"},
+                "as_of":      {"type": "string", "description": "Temporal filter YYYY-MM-DD."},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["entity"],
+        },
+    },
+    "locus_snapshot": {
+        "description": (
+            "Archive the entire Locus store to a portable .tar.gz file. "
+            "The snapshot captures the corpus index, KG, bulletin, entity resolver, "
+            "and all SQLite databases. Can be restored with locus_restore."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "output_path": {"type": "string", "description": "Destination archive path (e.g. backup.tar.gz)."},
+                "store_path":  {"type": "string", "default": ".locus"},
+            },
+            "required": ["output_path"],
+        },
+    },
+    "locus_restore": {
+        "description": (
+            "Restore a Locus store from a snapshot archive. "
+            "Extracts to store_path (default: .locus-restored). "
+            "Use overwrite=true to replace an existing store."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "snapshot_path": {"type": "string", "description": "Path to the .tar.gz archive."},
+                "store_path":    {"type": "string", "default": ".locus-restored"},
+                "overwrite":     {"type": "boolean", "default": False},
+            },
+            "required": ["snapshot_path"],
+        },
+    },
+    "locus_snapshot_info": {
+        "description": "Inspect a snapshot archive: file list, archive size, uncompressed size.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "snapshot_path": {"type": "string"},
+            },
+            "required": ["snapshot_path"],
+        },
+    },
 }

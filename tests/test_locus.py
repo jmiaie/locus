@@ -2475,5 +2475,242 @@ def test_github_bridge_matches():
 
 
 def test_version_is_0_8_0():
+    # Retained for history; version is now 0.9.0
     from locus.core import __version__
-    assert __version__ == "0.8.0"
+    assert __version__ == "0.9.0"
+
+
+# -----------------------------------------------------------------------
+# Phase 10 — QueryExpander
+# -----------------------------------------------------------------------
+
+def test_query_expander_no_kg_no_expansion(tmp_path):
+    from locus.query_expander import QueryExpander
+    from locus.memory.knowledge_graph import TemporalKG
+    from locus.memory.entity_resolver import EntityResolver
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    resolver = EntityResolver(str(tmp_path / "resolver.sqlite3"))
+    expander = QueryExpander(kg, resolver)
+    result = expander.expand("authentication jwt")
+    assert result.original == "authentication jwt"
+    assert result.expanded == "authentication jwt"
+    assert result.added_terms == []
+
+
+def test_query_expander_alias_expands(tmp_path):
+    from locus.query_expander import QueryExpander
+    from locus.memory.knowledge_graph import TemporalKG
+    from locus.memory.entity_resolver import EntityResolver
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    resolver = EntityResolver(str(tmp_path / "resolver.sqlite3"))
+    resolver.add_alias("auth", "AuthTeam")
+    expander = QueryExpander(kg, resolver)
+    result = expander.expand("auth system", max_expansions=5)
+    # "auth" resolves to "AuthTeam" — should be added
+    assert "AuthTeam" in result.added_terms
+    assert "AuthTeam" in result.expanded
+
+
+def test_query_expander_kg_neighbours_added(tmp_path):
+    from locus.query_expander import QueryExpander
+    from locus.memory.knowledge_graph import TemporalKG
+    from locus.memory.entity_resolver import EntityResolver
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    kg.add_triple("AuthTeam", "owns", "JWTService")
+    kg.add_triple("AuthTeam", "has_member", "Alice")
+    resolver = EntityResolver(str(tmp_path / "resolver.sqlite3"))
+    expander = QueryExpander(kg, resolver)
+    result = expander.expand("AuthTeam security", max_expansions=5)
+    # First-hop neighbours of AuthTeam should appear in added_terms
+    assert any(t in ("JWTService", "Alice") for t in result.added_terms)
+
+
+def test_query_expander_max_expansions_respected(tmp_path):
+    from locus.query_expander import QueryExpander
+    from locus.memory.knowledge_graph import TemporalKG
+    from locus.memory.entity_resolver import EntityResolver
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    for i in range(10):
+        kg.add_triple("Alice", f"rel{i}", f"Node{i}")
+    resolver = EntityResolver(str(tmp_path / "resolver.sqlite3"))
+    expander = QueryExpander(kg, resolver)
+    result = expander.expand("Alice", max_expansions=3)
+    assert len(result.added_terms) <= 3
+
+
+def test_query_expander_to_dict(tmp_path):
+    from locus.query_expander import QueryExpander
+    from locus.memory.knowledge_graph import TemporalKG
+    from locus.memory.entity_resolver import EntityResolver
+    kg = TemporalKG(str(tmp_path / "kg.sqlite3"))
+    resolver = EntityResolver(str(tmp_path / "resolver.sqlite3"))
+    expander = QueryExpander(kg, resolver)
+    d = expander.expand("test").to_dict()
+    assert set(d.keys()) == {"original", "expanded", "added_terms", "entity_matches"}
+
+
+def test_engine_expand_query(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_alias("auth", "AuthTeam")
+    result = engine.expand_query("auth security")
+    assert "original" in result
+    assert "expanded" in result
+    assert "added_terms" in result
+
+
+# -----------------------------------------------------------------------
+# Phase 10 — multi_retrieve
+# -----------------------------------------------------------------------
+
+def test_multi_retrieve_empty_queries(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    result = engine.multi_retrieve([])
+    assert result == []
+
+
+def test_multi_retrieve_single_query(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nJWT tokens.")
+    engine.index(tmp_path)
+    result = engine.multi_retrieve(["JWT tokens"], limit=3)
+    assert isinstance(result, list)
+
+
+def test_multi_retrieve_fuses_two_queries(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nJWT tokens for authentication.")
+    (tmp_path / "deploy.md").write_text("# Deploy\n\nKubernetes deployment.")
+    engine.index(tmp_path)
+    result = engine.multi_retrieve(["authentication", "JWT"], limit=5)
+    assert len(result) >= 1
+    # All are ScoredChunks
+    assert all(hasattr(c, "chunk_id") for c in result)
+
+
+def test_multi_retrieve_deduplicates(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nJWT authentication.")
+    engine.index(tmp_path)
+    # Same query twice — result should be deduplicated
+    result = engine.multi_retrieve(["JWT", "JWT authentication"], limit=5)
+    ids = [c.chunk_id for c in result]
+    assert len(ids) == len(set(ids))
+
+
+# -----------------------------------------------------------------------
+# Phase 10 — timeline
+# -----------------------------------------------------------------------
+
+def test_timeline_empty_entity(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    result = engine.timeline("UnknownEntity")
+    assert result["entity"] == "UnknownEntity"
+    assert result["event_count"] == 0
+    assert result["timeline"] == []
+
+
+def test_timeline_sorted_by_date(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "role", "Intern",   valid_from="2020-01-01")
+    engine.add_fact("Alice", "role", "Engineer", valid_from="2022-06-01")
+    engine.add_fact("Alice", "role", "Lead",     valid_from="2024-01-01")
+    result = engine.timeline("Alice")
+    dates = [e["date"] for e in result["timeline"] if e["date"]]
+    assert dates == sorted(dates)
+
+
+def test_timeline_undated_last(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Alice", "knows", "Bob")           # no date
+    engine.add_fact("Alice", "role", "Lead", valid_from="2024-01-01")
+    result = engine.timeline("Alice")
+    events = result["timeline"]
+    # Dated event should come before undated
+    dated_idx = next(i for i, e in enumerate(events) if e["date"])
+    undated_idx = next(i for i, e in enumerate(events) if not e["date"])
+    assert dated_idx < undated_idx
+
+
+def test_timeline_returns_all_keys(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    engine.add_fact("Bob", "works_at", "Acme", valid_from="2023-01-01")
+    result = engine.timeline("Bob")
+    assert "entity" in result
+    assert "event_count" in result
+    assert "timeline" in result
+    event = result["timeline"][0]
+    assert "date" in event and "predicate" in event and "object" in event
+
+
+# -----------------------------------------------------------------------
+# Phase 10 — snapshot / restore
+# -----------------------------------------------------------------------
+
+def test_snapshot_creates_archive(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+    snap_path = tmp_path / "backup.tar.gz"
+    result = engine.snapshot(str(snap_path))
+    assert snap_path.exists()
+    assert result["files_archived"] >= 1
+    assert result["size_bytes"] > 0
+
+
+def test_snapshot_restore_round_trip(tmp_path):
+    from locus.snapshot import LocusSnapshot
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nJWT tokens.")
+    engine.index(tmp_path)
+    doc_count_before = engine.corpus.doc_count()
+
+    snap_path = tmp_path / "snap.tar.gz"
+    engine.snapshot(str(snap_path))
+
+    restored_store = tmp_path / ".locus-restored"
+    LocusSnapshot.load(str(snap_path), store_path=str(restored_store))
+
+    engine2 = LocusEngine(store_path=str(restored_store))
+    assert engine2.corpus.doc_count() == doc_count_before
+
+
+def test_snapshot_overwrite_flag(tmp_path):
+    from locus.snapshot import LocusSnapshot
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc")
+    engine.index(tmp_path)
+    snap_path = tmp_path / "snap.tar.gz"
+    engine.snapshot(str(snap_path))
+
+    target = tmp_path / "restored"
+    target.mkdir()
+    # Without overwrite — should error
+    result = LocusSnapshot.load(str(snap_path), store_path=str(target), overwrite=False)
+    assert "error" in result
+    # With overwrite — should succeed
+    result2 = LocusSnapshot.load(str(snap_path), store_path=str(target), overwrite=True)
+    assert "error" not in result2
+
+
+def test_snapshot_inspect(tmp_path):
+    from locus.snapshot import LocusSnapshot
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+    snap_path = tmp_path / "snap.tar.gz"
+    engine.snapshot(str(snap_path))
+    info = LocusSnapshot.inspect(str(snap_path))
+    assert "file_count" in info
+    assert info["file_count"] >= 1
+    assert "archive_size_bytes" in info
+
+
+def test_snapshot_inspect_missing(tmp_path):
+    from locus.snapshot import LocusSnapshot
+    result = LocusSnapshot.inspect(str(tmp_path / "missing.tar.gz"))
+    assert "error" in result
+
+
+def test_version_is_0_9_0():
+    from locus.core import __version__
+    assert __version__ == "0.9.0"

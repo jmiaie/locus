@@ -120,6 +120,33 @@ def main() -> None:
     p_gh.add_argument("--token",  default=None, help="GitHub personal access token")
     p_gh.add_argument("--cache-dir", dest="cache_dir", default=None)
 
+    # ----------------------------------------------------------------
+    # Phase 10 — Query intelligence + snapshot
+    # ----------------------------------------------------------------
+    p_expand = sub.add_parser("expand", help="Expand a query using KG aliases and neighbours")
+    p_expand.add_argument("query")
+    p_expand.add_argument("--max", type=int, default=5, dest="max_expansions")
+
+    p_multi = sub.add_parser("multi-retrieve", help="Retrieve and fuse results for multiple query variants")
+    p_multi.add_argument("queries", nargs="+")
+    p_multi.add_argument("--limit", type=int, default=5)
+    p_multi.add_argument("--as-of", dest="as_of", default=None)
+
+    p_timeline = sub.add_parser("timeline", help="Show chronological KG timeline for an entity")
+    p_timeline.add_argument("entity")
+    p_timeline.add_argument("--as-of", dest="as_of", default=None)
+
+    p_snap = sub.add_parser("snapshot", help="Archive the store to a .tar.gz file")
+    p_snap.add_argument("output", help="Output archive path")
+
+    p_restore = sub.add_parser("restore", help="Restore a store from a snapshot archive")
+    p_restore.add_argument("snapshot", help="Path to .tar.gz snapshot")
+    p_restore.add_argument("--target", default=".locus-restored", help="Destination store path")
+    p_restore.add_argument("--overwrite", action="store_true")
+
+    p_snap_info = sub.add_parser("snapshot-info", help="Inspect a snapshot archive without extracting")
+    p_snap_info.add_argument("snapshot")
+
     p_bench = sub.add_parser("benchmark", help="Measure retrieval quality (recall@K, MRR)")
     p_bench.add_argument("qa_file", help="JSON file with [{query, expected_docs}] pairs")
     p_bench.add_argument("--k", default="1,3,5", help="Comma-separated K values")
@@ -321,6 +348,38 @@ def main() -> None:
         ev = LocusEval(engine, k_values=k_values)
         report = ev.score_from_file(args.qa_file)
         print(report.summary())
+
+    # ----------------------------------------------------------------
+    # Phase 10 commands
+    # ----------------------------------------------------------------
+    elif args.cmd == "expand":
+        print(json.dumps(engine.expand_query(args.query, max_expansions=args.max_expansions), indent=2))
+
+    elif args.cmd == "multi-retrieve":
+        chunks = engine.multi_retrieve(args.queries, limit=args.limit, as_of=args.as_of)
+        if not chunks:
+            print("No results.")
+        for i, c in enumerate(chunks, 1):
+            print(f"\n[{i}] {c.doc_path}  score={c.score:.4f}  via={c.provenance}")
+            print("-" * 60)
+            print(c.content[:400])
+
+    elif args.cmd == "timeline":
+        print(json.dumps(engine.timeline(args.entity, as_of=args.as_of), indent=2))
+
+    elif args.cmd == "snapshot":
+        print(json.dumps(engine.snapshot(args.output), indent=2))
+
+    elif args.cmd == "restore":
+        from .snapshot import LocusSnapshot
+        print(json.dumps(
+            LocusSnapshot.load(args.snapshot, store_path=args.target, overwrite=args.overwrite),
+            indent=2,
+        ))
+
+    elif args.cmd == "snapshot-info":
+        from .snapshot import LocusSnapshot
+        print(json.dumps(LocusSnapshot.inspect(args.snapshot), indent=2))
 
 
 if __name__ == "__main__":
