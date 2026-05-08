@@ -2475,9 +2475,9 @@ def test_github_bridge_matches():
 
 
 def test_version_is_0_8_0():
-    # Retained for history; version is now 0.9.0
+    # Retained for history; version is now 1.0.0
     from locus.core import __version__
-    assert __version__ == "0.9.0"
+    assert __version__ == "1.0.0"
 
 
 # -----------------------------------------------------------------------
@@ -2712,5 +2712,316 @@ def test_snapshot_inspect_missing(tmp_path):
 
 
 def test_version_is_0_9_0():
+    # retained for history; version is now 1.0.0
     from locus.core import __version__
-    assert __version__ == "0.9.0"
+    assert __version__ == "1.0.0"
+
+
+# -----------------------------------------------------------------------
+# Phase 11 — DocSimilarity
+# -----------------------------------------------------------------------
+
+def test_similarity_empty_corpus(tmp_path):
+    from locus.similarity import DocSimilarity
+    from locus.memory.corpus import Corpus
+    corpus = Corpus(tmp_path / "corpus")
+    sim = DocSimilarity(corpus)
+    assert sim.similar_to("nonexistent.md") == []
+
+
+def test_similarity_single_doc(tmp_path):
+    from locus.similarity import DocSimilarity
+    from locus.memory.corpus import Corpus
+    corpus = Corpus(tmp_path / "corpus")
+    (tmp_path / "auth.md").write_text("JWT authentication tokens")
+    corpus.add_file(tmp_path / "auth.md", base_path=tmp_path)
+    sim = DocSimilarity(corpus)
+    # Only one doc — nothing to compare against
+    assert sim.similar_to("auth.md") == []
+
+
+def test_similarity_finds_related_doc(tmp_path):
+    from locus.similarity import DocSimilarity
+    from locus.memory.corpus import Corpus
+    corpus = Corpus(tmp_path / "corpus")
+    (tmp_path / "auth.md").write_text("JWT authentication tokens security")
+    (tmp_path / "security.md").write_text("JWT authentication security policies")
+    (tmp_path / "deploy.md").write_text("Kubernetes deployment containers orchestration")
+    corpus.add_file(tmp_path / "auth.md", base_path=tmp_path)
+    corpus.add_file(tmp_path / "security.md", base_path=tmp_path)
+    corpus.add_file(tmp_path / "deploy.md", base_path=tmp_path)
+    sim = DocSimilarity(corpus)
+    results = sim.similar_to("auth.md", limit=2)
+    assert len(results) >= 1
+    assert results[0]["doc_path"] == "security.md"
+    assert results[0]["similarity"] > 0.0
+
+
+def test_similarity_result_structure(tmp_path):
+    from locus.similarity import DocSimilarity
+    from locus.memory.corpus import Corpus
+    corpus = Corpus(tmp_path / "corpus")
+    (tmp_path / "a.md").write_text("authentication jwt tokens")
+    (tmp_path / "b.md").write_text("authentication oauth tokens")
+    corpus.add_file(tmp_path / "a.md", base_path=tmp_path)
+    corpus.add_file(tmp_path / "b.md", base_path=tmp_path)
+    sim = DocSimilarity(corpus)
+    results = sim.similar_to("a.md", limit=5)
+    assert all("doc_path" in r and "similarity" in r for r in results)
+    assert all(0.0 <= r["similarity"] <= 1.0 for r in results)
+
+
+def test_similarity_matrix(tmp_path):
+    from locus.similarity import DocSimilarity
+    from locus.memory.corpus import Corpus
+    corpus = Corpus(tmp_path / "corpus")
+    (tmp_path / "a.md").write_text("authentication jwt")
+    (tmp_path / "b.md").write_text("authentication oauth")
+    (tmp_path / "c.md").write_text("kubernetes deployment")
+    corpus.add_file(tmp_path / "a.md", base_path=tmp_path)
+    corpus.add_file(tmp_path / "b.md", base_path=tmp_path)
+    corpus.add_file(tmp_path / "c.md", base_path=tmp_path)
+    sim = DocSimilarity(corpus)
+    matrix = sim.similarity_matrix()
+    assert isinstance(matrix, list)
+    assert all("doc_a" in r and "doc_b" in r and "similarity" in r for r in matrix)
+
+
+def test_engine_related_docs(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nJWT authentication.")
+    (tmp_path / "security.md").write_text("# Security\n\nJWT authentication security.")
+    (tmp_path / "deploy.md").write_text("# Deploy\n\nKubernetes deployment.")
+    engine.index(tmp_path)
+    results = engine.related_docs("auth.md", limit=3)
+    assert isinstance(results, list)
+
+
+# -----------------------------------------------------------------------
+# Phase 11 — CorpusDiff
+# -----------------------------------------------------------------------
+
+def test_diff_empty_corpus(tmp_path):
+    from locus.diff import CorpusDiff
+    from locus.memory.corpus import Corpus
+    corpus = Corpus(tmp_path / "corpus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    diff = CorpusDiff(corpus)
+    result = diff.diff(str(tmp_path))
+    assert "doc.md" in result["new"]
+    assert result["changed"] == []
+    assert result["deleted"] == []
+
+
+def test_diff_changed_file(tmp_path):
+    from locus.diff import CorpusDiff
+    from locus.memory.corpus import Corpus
+    corpus = Corpus(tmp_path / "corpus")
+    f = tmp_path / "doc.md"
+    f.write_text("original content")
+    corpus.add_file(f, base_path=tmp_path)
+    f.write_text("updated content changes here")
+    diff = CorpusDiff(corpus)
+    result = diff.diff(str(tmp_path))
+    assert "doc.md" in result["changed"]
+    assert result["new"] == []
+
+
+def test_diff_deleted_file(tmp_path):
+    from locus.diff import CorpusDiff
+    from locus.memory.corpus import Corpus
+    corpus = Corpus(tmp_path / "corpus")
+    f = tmp_path / "doc.md"
+    f.write_text("# Doc\n\nThis document has enough content to be chunked and indexed properly.")
+    corpus.add_file(f, base_path=tmp_path)
+    f.unlink()
+    diff = CorpusDiff(corpus)
+    result = diff.diff(str(tmp_path))
+    assert "doc.md" in result["deleted"]
+
+
+def test_diff_unchanged_file(tmp_path):
+    from locus.diff import CorpusDiff
+    from locus.memory.corpus import Corpus
+    corpus = Corpus(tmp_path / "corpus")
+    f = tmp_path / "doc.md"
+    f.write_text("content unchanged")
+    corpus.add_file(f, base_path=tmp_path)
+    diff = CorpusDiff(corpus)
+    result = diff.diff(str(tmp_path))
+    assert result["unchanged"] == 1
+    assert result["new"] == []
+    assert result["changed"] == []
+    assert result["deleted"] == []
+
+
+def test_diff_has_changes_flag(tmp_path):
+    from locus.diff import CorpusDiff
+    from locus.memory.corpus import Corpus
+    corpus = Corpus(tmp_path / "corpus")
+    (tmp_path / "new.md").write_text("new file")
+    diff = CorpusDiff(corpus)
+    assert diff.has_changes(str(tmp_path)) is True
+
+
+def test_engine_diff(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+    result = engine.diff(str(tmp_path))
+    assert "new" in result and "changed" in result and "deleted" in result
+
+
+# -----------------------------------------------------------------------
+# Phase 12 — AnnotationStore
+# -----------------------------------------------------------------------
+
+def test_annotation_basic(tmp_path):
+    from locus.annotations import AnnotationStore
+    store = AnnotationStore(tmp_path / "annotations.sqlite3")
+    store.annotate("chunk-1", "important", note="key section")
+    anns = store.get("chunk-1")
+    assert len(anns) == 1
+    assert anns[0]["label"] == "important"
+    assert anns[0]["note"] == "key section"
+
+
+def test_annotation_multiple_labels(tmp_path):
+    from locus.annotations import AnnotationStore
+    store = AnnotationStore(tmp_path / "annotations.sqlite3")
+    store.annotate("chunk-1", "important")
+    store.annotate("chunk-1", "reviewed")
+    anns = store.get("chunk-1")
+    labels = {a["label"] for a in anns}
+    assert "important" in labels
+    assert "reviewed" in labels
+
+
+def test_annotation_chunks_with_label(tmp_path):
+    from locus.annotations import AnnotationStore
+    store = AnnotationStore(tmp_path / "annotations.sqlite3")
+    store.annotate("chunk-1", "pinned")
+    store.annotate("chunk-2", "pinned")
+    store.annotate("chunk-3", "reviewed")
+    pinned = store.chunks_with_label("pinned")
+    assert "chunk-1" in pinned
+    assert "chunk-2" in pinned
+    assert "chunk-3" not in pinned
+
+
+def test_annotation_remove(tmp_path):
+    from locus.annotations import AnnotationStore
+    store = AnnotationStore(tmp_path / "annotations.sqlite3")
+    store.annotate("chunk-1", "important")
+    removed = store.remove("chunk-1", "important")
+    assert removed is True
+    assert store.get("chunk-1") == []
+
+
+def test_annotation_all_labels(tmp_path):
+    from locus.annotations import AnnotationStore
+    store = AnnotationStore(tmp_path / "annotations.sqlite3")
+    store.annotate("chunk-1", "alpha")
+    store.annotate("chunk-2", "beta")
+    store.annotate("chunk-3", "alpha")
+    labels = store.all_labels()
+    assert "alpha" in labels
+    assert "beta" in labels
+    assert len(labels) == 2
+
+
+def test_annotation_stats(tmp_path):
+    from locus.annotations import AnnotationStore
+    store = AnnotationStore(tmp_path / "annotations.sqlite3")
+    store.annotate("chunk-1", "important")
+    store.annotate("chunk-2", "important")
+    stats = store.stats()
+    assert stats["total_annotations"] == 2
+    assert stats["distinct_labels"] == 1
+    assert stats["annotated_chunks"] == 2
+
+
+def test_engine_annotate(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path)
+    chunks = engine.retrieve("content")
+    if chunks:
+        chunk_id = chunks[0].chunk_id
+        result = engine.annotate(chunk_id, "important", note="test note")
+        assert result["label"] == "important"
+        anns = engine.get_annotations(chunk_id)
+        assert len(anns["annotations"]) == 1
+
+
+# -----------------------------------------------------------------------
+# Phase 12 — RelevanceFeedback
+# -----------------------------------------------------------------------
+
+def test_feedback_mark_relevant(tmp_path):
+    from locus.feedback import RelevanceFeedback
+    fb = RelevanceFeedback(tmp_path / "feedback.sqlite3")
+    fb.mark("chunk-1", "authentication query", relevant=True)
+    adj = fb.score_adjustment("chunk-1", "authentication query")
+    assert adj > 0.0
+
+
+def test_feedback_mark_irrelevant(tmp_path):
+    from locus.feedback import RelevanceFeedback
+    fb = RelevanceFeedback(tmp_path / "feedback.sqlite3")
+    fb.mark("chunk-1", "authentication query", relevant=False)
+    adj = fb.score_adjustment("chunk-1", "authentication query")
+    assert adj < 0.0
+
+
+def test_feedback_no_signal_returns_zero(tmp_path):
+    from locus.feedback import RelevanceFeedback
+    fb = RelevanceFeedback(tmp_path / "feedback.sqlite3")
+    assert fb.score_adjustment("chunk-1", "any query") == 0.0
+
+
+def test_feedback_different_queries_independent(tmp_path):
+    from locus.feedback import RelevanceFeedback
+    fb = RelevanceFeedback(tmp_path / "feedback.sqlite3")
+    fb.mark("chunk-1", "query A", relevant=True)
+    fb.mark("chunk-1", "query B", relevant=False)
+    assert fb.score_adjustment("chunk-1", "query A") > 0.0
+    assert fb.score_adjustment("chunk-1", "query B") < 0.0
+
+
+def test_feedback_stats(tmp_path):
+    from locus.feedback import RelevanceFeedback
+    fb = RelevanceFeedback(tmp_path / "feedback.sqlite3")
+    fb.mark("c1", "q1", relevant=True)
+    fb.mark("c2", "q1", relevant=False)
+    fb.mark("c3", "q2", relevant=True)
+    stats = fb.stats()
+    assert stats["total_signals"] == 3
+    assert stats["relevant"] == 2
+    assert stats["irrelevant"] == 1
+
+
+def test_feedback_wired_into_reranker(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nJWT authentication tokens.")
+    engine.index(tmp_path)
+    chunks = engine.retrieve("JWT")
+    if not chunks:
+        return
+    chunk_id = chunks[0].chunk_id
+    engine.mark_relevant(chunk_id, "JWT")
+    reranked = engine.rerank(chunks, "JWT")
+    assert isinstance(reranked, list)
+
+
+def test_engine_mark_relevant_irrelevant(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    result = engine.mark_relevant("chunk-x", "test query")
+    assert result["signal"] == "relevant"
+    result2 = engine.mark_irrelevant("chunk-x", "test query")
+    assert result2["signal"] == "irrelevant"
+
+
+def test_version_is_1_0_0():
+    from locus.core import __version__
+    assert __version__ == "1.0.0"

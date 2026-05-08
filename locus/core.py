@@ -40,10 +40,14 @@ from .context.budget import ContextBudget
 from .hooks import LocusHooks
 from .reasoning import LocusReasoner
 from .query_expander import QueryExpander
+from .similarity import DocSimilarity
+from .diff import CorpusDiff
+from .annotations import AnnotationStore
+from .feedback import RelevanceFeedback
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.9.0"
+__version__ = "1.0.0"
 
 # Fixed weights appended after intent weights: [structural, recency]
 _STRUCTURAL_WEIGHT  = 1.0
@@ -91,6 +95,16 @@ class LocusEngine:
         self._hooks = LocusHooks()                                # Phase 9
         self._reasoner = LocusReasoner(self.kg)                   # Phase 9
         self._expander = QueryExpander(self.kg, self.resolver)    # Phase 10
+        self._similarity = DocSimilarity(self.corpus)             # Phase 11
+        self._diff = CorpusDiff(self.corpus)                      # Phase 11
+        self.annotations = AnnotationStore(                       # Phase 12
+            self.store_path / "annotations.sqlite3"
+        )
+        self.feedback = RelevanceFeedback(                        # Phase 12
+            self.store_path / "feedback.sqlite3"
+        )
+        # Wire feedback into reranker
+        self._reranker.feedback = self.feedback
 
         # Query result cache — invalidated on corpus changes
         self._query_cache: dict[str, list[ScoredChunk]] = {}
@@ -650,6 +664,53 @@ class LocusEngine:
         return self.corpus.top_terms(limit=limit)
 
     # ------------------------------------------------------------------
+    # Phase 11 — Document intelligence
+    # ------------------------------------------------------------------
+
+    def related_docs(self, doc_path: str, limit: int = 5) -> list[dict]:
+        """Return the most similar documents to *doc_path* by TF-IDF cosine."""
+        return self._similarity.similar_to(doc_path, limit=limit)
+
+    def similarity_matrix(self) -> list[dict]:
+        """Pairwise TF-IDF cosine similarities for all indexed documents."""
+        return self._similarity.similarity_matrix()
+
+    def diff(self, path: str, pattern: str = "**/*.md") -> dict:
+        """Preview what would change if *path* were re-indexed now.
+
+        Returns counts/lists of new, changed, deleted, and unchanged files
+        without modifying the corpus.
+        """
+        return self._diff.diff(path, pattern=pattern)
+
+    # ------------------------------------------------------------------
+    # Phase 12 — Annotations & feedback
+    # ------------------------------------------------------------------
+
+    def annotate(self, chunk_id: str, label: str, note: str | None = None) -> dict:
+        """Attach a label (and optional note) to a chunk."""
+        self.annotations.annotate(chunk_id, label, note)
+        return {"chunk_id": chunk_id, "label": label, "note": note}
+
+    def get_annotations(self, chunk_id: str) -> dict:
+        """Return all annotations for a chunk."""
+        return {"chunk_id": chunk_id, "annotations": self.annotations.get(chunk_id)}
+
+    def chunks_with_label(self, label: str) -> dict:
+        """Return all chunk IDs carrying *label*."""
+        return {"label": label, "chunk_ids": self.annotations.chunks_with_label(label)}
+
+    def mark_relevant(self, chunk_id: str, query: str) -> dict:
+        """Mark *chunk_id* as relevant for *query*; boosts future reranking."""
+        self.feedback.mark(chunk_id, query, relevant=True)
+        return {"chunk_id": chunk_id, "query": query, "signal": "relevant"}
+
+    def mark_irrelevant(self, chunk_id: str, query: str) -> dict:
+        """Mark *chunk_id* as irrelevant for *query*; penalises future reranking."""
+        self.feedback.mark(chunk_id, query, relevant=False)
+        return {"chunk_id": chunk_id, "query": query, "signal": "irrelevant"}
+
+    # ------------------------------------------------------------------
     # Phase 10 — Query intelligence + snapshot
     # ------------------------------------------------------------------
 
@@ -734,4 +795,6 @@ class LocusEngine:
             "bulletin": self.bulletin.stats(),
             "budget": self.budget.stats(),
             "resolver": self.resolver.stats(),
+            "annotations": self.annotations.stats(),
+            "feedback": self.feedback.stats(),
         }

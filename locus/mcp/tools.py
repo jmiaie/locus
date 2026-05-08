@@ -578,4 +578,113 @@ TOOLS: dict[str, dict] = {
             "required": ["snapshot_path"],
         },
     },
+    # ------------------------------------------------------------------
+    # Phase 11 — Document intelligence
+    # ------------------------------------------------------------------
+    "locus_related_docs": {
+        "description": (
+            "Find documents most similar to a given document using TF-IDF cosine similarity. "
+            "No embeddings — built entirely on the existing term index. "
+            "Useful for 'find more like this' workflows and knowledge base navigation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc_path":   {"type": "string", "description": "Path of the reference document."},
+                "limit":      {"type": "integer", "default": 5},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["doc_path"],
+        },
+    },
+    "locus_diff": {
+        "description": (
+            "Preview what would change if a directory were re-indexed now. "
+            "Returns lists of new, changed, and deleted files without modifying the corpus. "
+            "Run before locus_sync to understand the impact."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path":       {"type": "string"},
+                "pattern":    {"type": "string", "default": "**/*.md"},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["path"],
+        },
+    },
+    # ------------------------------------------------------------------
+    # Phase 12 — Annotations & feedback
+    # ------------------------------------------------------------------
+    "locus_annotate": {
+        "description": (
+            "Attach a label and optional note to a chunk. "
+            "Labels are arbitrary strings: 'important', 'outdated', 'reviewed', etc. "
+            "Multiple labels per chunk are supported."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "chunk_id":   {"type": "string"},
+                "label":      {"type": "string"},
+                "note":       {"type": "string"},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["chunk_id", "label"],
+        },
+    },
+    "locus_get_annotations": {
+        "description": "Return all labels and notes attached to a chunk.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "chunk_id":   {"type": "string"},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["chunk_id"],
+        },
+    },
+    "locus_chunks_with_label": {
+        "description": "Return all chunk IDs that carry a given annotation label.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "label":      {"type": "string"},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["label"],
+        },
+    },
+    "locus_mark_relevant": {
+        "description": (
+            "Mark a chunk as relevant for a query. "
+            "Persists a +0.25 boost that the reranker applies on future retrieve calls "
+            "for the same query. Use after a successful retrieval to reinforce good results."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "chunk_id":   {"type": "string"},
+                "query":      {"type": "string"},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["chunk_id", "query"],
+        },
+    },
+    "locus_mark_irrelevant": {
+        "description": (
+            "Mark a chunk as irrelevant for a query. "
+            "Persists a -0.40 penalty that the reranker applies on future retrieve calls "
+            "for the same query. Use to suppress consistently bad results."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "chunk_id":   {"type": "string"},
+                "query":      {"type": "string"},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["chunk_id", "query"],
+        },
+    },
 }

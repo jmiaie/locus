@@ -121,6 +121,36 @@ def main() -> None:
     p_gh.add_argument("--cache-dir", dest="cache_dir", default=None)
 
     # ----------------------------------------------------------------
+    # Phase 11 — Document intelligence
+    # ----------------------------------------------------------------
+    p_related = sub.add_parser("related", help="Find documents similar to a given doc")
+    p_related.add_argument("doc_path")
+    p_related.add_argument("--limit", type=int, default=5)
+
+    p_diff = sub.add_parser("diff", help="Preview index changes vs filesystem")
+    p_diff.add_argument("path")
+    p_diff.add_argument("--pattern", default="**/*.md")
+
+    # ----------------------------------------------------------------
+    # Phase 12 — Annotations & feedback
+    # ----------------------------------------------------------------
+    p_ann = sub.add_parser("annotate", help="Attach a label to a chunk")
+    p_ann.add_argument("chunk_id")
+    p_ann.add_argument("label")
+    p_ann.add_argument("--note", default=None)
+
+    p_get_ann = sub.add_parser("annotations", help="Show annotations for a chunk")
+    p_get_ann.add_argument("chunk_id")
+
+    p_relevant = sub.add_parser("mark-relevant", help="Mark a chunk as relevant for a query")
+    p_relevant.add_argument("chunk_id")
+    p_relevant.add_argument("query")
+
+    p_irrelevant = sub.add_parser("mark-irrelevant", help="Mark a chunk as irrelevant for a query")
+    p_irrelevant.add_argument("chunk_id")
+    p_irrelevant.add_argument("query")
+
+    # ----------------------------------------------------------------
     # Phase 10 — Query intelligence + snapshot
     # ----------------------------------------------------------------
     p_expand = sub.add_parser("expand", help="Expand a query using KG aliases and neighbours")
@@ -352,6 +382,24 @@ def main() -> None:
     # ----------------------------------------------------------------
     # Phase 10 commands
     # ----------------------------------------------------------------
+    elif args.cmd == "related":
+        print(json.dumps(engine.related_docs(args.doc_path, limit=args.limit), indent=2))
+
+    elif args.cmd == "diff":
+        print(json.dumps(engine.diff(args.path, pattern=args.pattern), indent=2))
+
+    elif args.cmd == "annotate":
+        print(json.dumps(engine.annotate(args.chunk_id, args.label, args.note), indent=2))
+
+    elif args.cmd == "annotations":
+        print(json.dumps(engine.get_annotations(args.chunk_id), indent=2))
+
+    elif args.cmd == "mark-relevant":
+        print(json.dumps(engine.mark_relevant(args.chunk_id, args.query), indent=2))
+
+    elif args.cmd == "mark-irrelevant":
+        print(json.dumps(engine.mark_irrelevant(args.chunk_id, args.query), indent=2))
+
     elif args.cmd == "expand":
         print(json.dumps(engine.expand_query(args.query, max_expansions=args.max_expansions), indent=2))
 

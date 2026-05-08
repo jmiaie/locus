@@ -2,16 +2,17 @@
 LocusReranker — lightweight post-RRF heuristic re-ranking.
 
 Applied *after* Reciprocal Rank Fusion; it reshuffles the already-fused
-result set rather than expanding it.  Three independent boosts are
+result set rather than expanding it.  Four independent boosts are
 combined multiplicatively so a chunk with zero RRF score stays at zero:
 
-    new_score = rrf_score * (1 + title_boost + entity_boost + freshness_boost)
+    new_score = rrf_score * (1 + title_boost + entity_boost + freshness_boost + feedback_boost)
 
 Boosts (all normalised 0–1 before weighting):
 
   title     — query term overlap with the chunk's section heading
   entity    — fraction of chunk entities that have KG facts
   freshness — recency of the document's frontmatter date field
+  feedback  — relevance feedback signal (+0.25 relevant / -0.40 irrelevant)
 
 Default weights are conservative: the re-ranker nudges, it does not
 override.  Pass custom RerankerWeights to tighten or loosen.
@@ -30,6 +31,7 @@ from .bm25 import ScoredChunk
 
 if TYPE_CHECKING:
     from ..memory.knowledge_graph import TemporalKG
+    from ..feedback import RelevanceFeedback
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +57,14 @@ class LocusReranker:
     def __init__(
         self,
         corpus: Corpus,
-        kg: TemporalKG | None = None,
+        kg: "TemporalKG | None" = None,
         weights: RerankerWeights | None = None,
+        feedback: "RelevanceFeedback | None" = None,
     ):
         self.corpus = corpus
         self.kg = kg
         self.weights = weights or RerankerWeights()
+        self.feedback = feedback
         self._decay = math.log(2) / _FRESHNESS_HALF_LIFE
 
     def rerank(
@@ -112,6 +116,10 @@ class LocusReranker:
                 if doc_date:
                     fresh = self._freshness(doc_date, now)
                     boost += fresh * w.freshness
+
+            # --- Relevance feedback boost (Phase 12) ---
+            if self.feedback:
+                boost += self.feedback.score_adjustment(chunk.chunk_id, query)
 
             boosted.append((chunk, chunk.score * (1.0 + boost)))
 

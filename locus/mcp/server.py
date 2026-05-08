@@ -289,6 +289,42 @@ def _call_tool(name: str, arguments: dict) -> dict:
             from ..snapshot import LocusSnapshot
             return LocusSnapshot.inspect(arguments["snapshot_path"])
 
+        # Phase 11 — document intelligence
+        if name == "locus_related_docs":
+            return {
+                "doc_path": arguments["doc_path"],
+                "related": engine.related_docs(
+                    arguments["doc_path"],
+                    limit=int(arguments.get("limit", 5)),
+                ),
+            }
+
+        if name == "locus_diff":
+            return engine.diff(
+                path=arguments["path"],
+                pattern=arguments.get("pattern", "**/*.md"),
+            )
+
+        # Phase 12 — annotations & feedback
+        if name == "locus_annotate":
+            return engine.annotate(
+                chunk_id=arguments["chunk_id"],
+                label=arguments["label"],
+                note=arguments.get("note"),
+            )
+
+        if name == "locus_get_annotations":
+            return engine.get_annotations(arguments["chunk_id"])
+
+        if name == "locus_chunks_with_label":
+            return engine.chunks_with_label(arguments["label"])
+
+        if name == "locus_mark_relevant":
+            return engine.mark_relevant(arguments["chunk_id"], arguments["query"])
+
+        if name == "locus_mark_irrelevant":
+            return engine.mark_irrelevant(arguments["chunk_id"], arguments["query"])
+
         return {"error": f"Unhandled tool: {name}"}
 
     except KeyError as e:

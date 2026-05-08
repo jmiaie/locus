@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.0.0] — 2026-05-08
+
+### Added
+- **`DocSimilarity`** — TF-IDF cosine similarity between corpus documents; `similar_to(doc_path, limit)` returns nearest neighbours; `similarity_matrix()` returns all pairwise scores; pure stdlib, built on the existing term index
+- **`CorpusDiff`** — compare current corpus state against the filesystem without modifying anything; classifies files as `new`, `changed`, `deleted`, or `unchanged`; `has_changes()` fast boolean check
+- **`AnnotationStore`** — SQLite-backed chunk annotations; attach arbitrary labels and notes to any chunk; `annotate()`, `remove()`, `get()`, `chunks_with_label()`, `all_labels()`, `clear_chunk()`, `stats()`
+- **`RelevanceFeedback`** — SQLite-backed relevance signals; `mark(chunk_id, query, relevant)` persists per-(chunk, query) signals; `score_adjustment()` returns `+0.25` / `-0.40`; wired into `LocusReranker` as a 4th boost
+- **`LocusReranker`** updated: four-boost formula — title + entity density + freshness + **feedback**; `feedback` param on constructor
+- **`engine.related_docs(doc_path, limit)`** — surface method for `DocSimilarity.similar_to()`
+- **`engine.similarity_matrix()`** — surface method for `DocSimilarity.similarity_matrix()`
+- **`engine.diff(path, pattern)`** — surface method for `CorpusDiff.diff()`
+- **`engine.annotate()`, `get_annotations()`, `chunks_with_label()`** — annotation surface methods
+- **`engine.mark_relevant()`, `engine.mark_irrelevant()`** — feedback surface methods
+- `engine.status()` now includes `annotations` and `feedback` stats
+- New CLI commands: `related`, `diff`, `annotate`, `annotations`, `mark-relevant`, `mark-irrelevant`
+- 7 new MCP tools (47 total): `locus_related_docs`, `locus_diff`, `locus_annotate`, `locus_get_annotations`, `locus_chunks_with_label`, `locus_mark_relevant`, `locus_mark_irrelevant`
+- `DocSimilarity`, `CorpusDiff`, `AnnotationStore`, `RelevanceFeedback` exported from top-level `locus` package
+- 27 new tests (254 total, all passing)
+
+### Changed
+- **`__version__` bumped to `1.0.0`** — first stable release milestone
+- `pyproject.toml` version updated to `1.0.0`
+
+---
+
 ## [0.9.0] — 2026-05-08
 
 ### Added
