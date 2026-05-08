@@ -31,6 +31,8 @@ TOOLS: dict[str, dict] = {
                 "limit": {"type": "integer", "default": 5, "description": "Max chunks to return."},
                 "as_of": {"type": "string", "description": "Temporal filter — only facts valid on this date (YYYY-MM-DD)."},
                 "use_links": {"type": "boolean", "default": True, "description": "Follow wikilinks from top hits."},
+                "full_content": {"type": "boolean", "default": False, "description": "Return full chunk content instead of truncating at 600 chars."},
+                "intent": {"type": "string", "enum": ["kg_first", "bm25_first", "balanced"], "description": "Override auto-detected query intent."},
                 "store_path": {"type": "string", "default": ".locus"},
             },
             "required": ["query"],

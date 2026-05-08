@@ -62,24 +62,30 @@ def _call_tool(name: str, arguments: dict) -> dict:
             )
 
         if name == "locus_retrieve":
+            from ..retrieval.classifier import QueryIntent
+            raw_intent = arguments.get("intent")
+            intent = QueryIntent(raw_intent) if raw_intent else None
+            full_content = bool(arguments.get("full_content", False))
             chunks = engine.retrieve(
                 query=arguments["query"],
                 limit=min(int(arguments.get("limit", 5)), 20),
                 as_of=arguments.get("as_of"),
                 use_links=bool(arguments.get("use_links", True)),
+                intent=intent,
             )
             return {
+                "intent": intent.value if intent else "auto",
                 "results": [
                     {
                         "chunk_id": c.chunk_id,
                         "doc_path": c.doc_path,
                         "score": round(c.score, 4),
                         "provenance": c.provenance,
-                        "content": c.content[:600],
+                        "content": c.content if full_content else c.content[:600],
                         "entities": c.entities or [],
                     }
                     for c in chunks
-                ]
+                ],
             }
 
         if name == "locus_add_fact":

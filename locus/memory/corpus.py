@@ -2,6 +2,7 @@
 Corpus — SQLite-backed document store with inverted term index for BM25.
 """
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -52,6 +53,7 @@ class Corpus:
     CREATE TABLE IF NOT EXISTS doc_stats (
         doc_path   TEXT PRIMARY KEY,
         word_count INTEGER,
+        checksum   TEXT,
         indexed_at TEXT DEFAULT (datetime('now'))
     );
     """
@@ -61,33 +63,79 @@ class Corpus:
         self.store_path.mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.store_path / "corpus.sqlite3")
         self._chunker = Chunker()
+        # In-process stats cache — invalidated on add/remove
+        self._N_cache: Optional[int] = None
+        self._avgdl_cache: Optional[float] = None
         self._init_db()
 
     def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(self._SCHEMA)
+            # Migration: add checksum column if corpus pre-dates Phase 1
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(doc_stats)").fetchall()}
+            if "checksum" not in cols:
+                conn.execute("ALTER TABLE doc_stats ADD COLUMN checksum TEXT")
 
     def _conn(self):
         return sqlite3.connect(self.db_path)
+
+    def _invalidate_stats(self) -> None:
+        self._N_cache = None
+        self._avgdl_cache = None
 
     # ------------------------------------------------------------------
     # Indexing
     # ------------------------------------------------------------------
 
-    def add_file(self, path: Path, base_path: Path = None) -> int:
+    @staticmethod
+    def _file_checksum(path: Path) -> str:
+        h = hashlib.sha256()
+        h.update(path.read_bytes())
+        return h.hexdigest()
+
+    def _stored_checksum(self, doc_path: str) -> Optional[str]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT checksum FROM doc_stats WHERE doc_path = ?", (doc_path,)
+            ).fetchone()
+        return row[0] if row else None
+
+    def add_file(self, path: Path, base_path: Path = None, force: bool = False) -> int:
+        """
+        Index a file. Returns number of chunks added.
+        Returns 0 (skips) if the file is unchanged since last index, unless force=True.
+        """
         chunks = self._chunker.chunk_file(path, base_path=base_path)
         if not chunks:
             return 0
         doc_id = chunks[0].doc_path
+
+        # Checksum dedup — skip unchanged files
+        if not force:
+            try:
+                checksum = self._file_checksum(path)
+                if checksum == self._stored_checksum(doc_id):
+                    logger.debug("Skipping unchanged file: %s", doc_id)
+                    return 0
+            except Exception:
+                pass  # if checksum fails, proceed with indexing
+
         self._remove_doc(doc_id)
         for chunk in chunks:
             self._store_chunk(chunk)
+
         word_count = sum(len(c.content.split()) for c in chunks)
+        try:
+            checksum = self._file_checksum(path)
+        except Exception:
+            checksum = None
+
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO doc_stats (doc_path, word_count) VALUES (?, ?)",
-                (doc_id, word_count),
+                "INSERT OR REPLACE INTO doc_stats (doc_path, word_count, checksum) VALUES (?, ?, ?)",
+                (doc_id, word_count, checksum),
             )
+        self._invalidate_stats()
         return len(chunks)
 
     def add_directory(self, path: Path, pattern: str = "**/*.md") -> int:
@@ -116,6 +164,7 @@ class Corpus:
             conn.execute(f"DELETE FROM term_index WHERE chunk_id IN ({ph})", ids)
             conn.execute("DELETE FROM chunks WHERE doc_path = ?", (doc_path,))
             conn.execute("DELETE FROM doc_stats WHERE doc_path = ?", (doc_path,))
+        self._invalidate_stats()
         return len(ids)
 
     def _store_chunk(self, chunk: Chunk) -> None:
@@ -158,12 +207,28 @@ class Corpus:
         if not row:
             return None
         return Chunk(
-            id=row[0],
-            doc_path=row[1],
-            content=row[2],
-            start_word=row[3],
-            metadata=json.loads(row[4] or "{}"),
+            id=row[0], doc_path=row[1], content=row[2],
+            start_word=row[3], metadata=json.loads(row[4] or "{}"),
         )
+
+    def get_chunks_batch(self, chunk_ids: list[str]) -> dict[str, Chunk]:
+        """Fetch multiple chunks in a single query."""
+        if not chunk_ids:
+            return {}
+        ph = ",".join("?" * len(chunk_ids))
+        with self._conn() as conn:
+            rows = conn.execute(
+                f"SELECT id, doc_path, content, start_word, metadata "
+                f"FROM chunks WHERE id IN ({ph})",
+                chunk_ids,
+            ).fetchall()
+        return {
+            r[0]: Chunk(
+                id=r[0], doc_path=r[1], content=r[2],
+                start_word=r[3], metadata=json.loads(r[4] or "{}"),
+            )
+            for r in rows
+        }
 
     def get_chunks_for_doc(self, doc_path: str) -> list[Chunk]:
         with self._conn() as conn:
@@ -174,11 +239,8 @@ class Corpus:
             ).fetchall()
         return [
             Chunk(
-                id=r[0],
-                doc_path=r[1],
-                content=r[2],
-                start_word=r[3],
-                metadata=json.loads(r[4] or "{}"),
+                id=r[0], doc_path=r[1], content=r[2],
+                start_word=r[3], metadata=json.loads(r[4] or "{}"),
             )
             for r in rows
         ]
@@ -191,17 +253,21 @@ class Corpus:
         return {r[0]: r[1] for r in rows}
 
     def doc_count(self) -> int:
-        with self._conn() as conn:
-            return conn.execute("SELECT COUNT(*) FROM doc_stats").fetchone()[0]
+        if self._N_cache is None:
+            with self._conn() as conn:
+                self._N_cache = conn.execute("SELECT COUNT(*) FROM doc_stats").fetchone()[0]
+        return self._N_cache
 
     def chunk_count(self) -> int:
         with self._conn() as conn:
             return conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
     def avg_doc_length(self) -> float:
-        with self._conn() as conn:
-            result = conn.execute("SELECT AVG(word_count) FROM doc_stats").fetchone()[0]
-        return result or 0.0
+        if self._avgdl_cache is None:
+            with self._conn() as conn:
+                result = conn.execute("SELECT AVG(word_count) FROM doc_stats").fetchone()[0]
+            self._avgdl_cache = result or 0.0
+        return self._avgdl_cache
 
     def list_docs(self) -> list[str]:
         with self._conn() as conn:

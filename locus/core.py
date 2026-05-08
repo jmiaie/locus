@@ -6,8 +6,12 @@ Three-signal retrieval pipeline, no embeddings required:
   2. KG       — entity expansion via temporal knowledge graph
   3. LinkWalk — wikilink/citation graph traversal from top BM25 hits
 
-Fused via Reciprocal Rank Fusion. Tiered bulletin tracks hot context
-across rounds. Token budget monitors context injection cost softly.
+Signals are fused via weighted Reciprocal Rank Fusion. Query intent
+(KG-first / BM25-first / balanced) is classified automatically and used
+to set the RRF weights per query.
+
+Tiered bulletin tracks hot context across rounds (persisted to SQLite).
+Token budget monitors context injection cost softly.
 """
 
 import logging
@@ -19,12 +23,13 @@ from .retrieval.bm25 import BM25Retriever, ScoredChunk
 from .retrieval.kg_retrieval import KGRetriever
 from .retrieval.link_walker import LinkWalker
 from .retrieval.fusion import rrf_fuse
+from .retrieval.classifier import classify_query, INTENT_WEIGHTS, QueryIntent
 from .context.bulletin import ContextBulletin
 from .context.budget import ContextBudget
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 class LocusEngine:
@@ -44,7 +49,10 @@ class LocusEngine:
 
         self.corpus = Corpus(self.store_path / "corpus")
         self.kg = TemporalKG(str(self.store_path / "kg.sqlite3"))
-        self.bulletin = ContextBulletin(archive_path=self.store_path / "archive")
+        self.bulletin = ContextBulletin(
+            archive_path=self.store_path / "archive",
+            db_path=self.store_path / "bulletin.sqlite3",
+        )
         self.budget = ContextBudget()
 
         self._bm25 = BM25Retriever(self.corpus)
@@ -56,7 +64,11 @@ class LocusEngine:
     # ------------------------------------------------------------------
 
     def index(self, path: str | Path, pattern: str = "**/*.md") -> dict:
-        """Index a file or directory. Returns counts of files, chunks, KG triples."""
+        """
+        Index a file or directory.
+        Skips files whose content is unchanged since last index (checksum dedup).
+        Returns counts of files, chunks added, and KG triples extracted.
+        """
         path = Path(path)
         if path.is_file():
             chunks = self.corpus.add_file(path)
@@ -96,11 +108,21 @@ class LocusEngine:
         limit: int = 5,
         as_of: str = None,
         use_links: bool = True,
+        intent: QueryIntent = None,
     ) -> list[ScoredChunk]:
         """
-        Main retrieval: BM25 + KG entity expansion + link walk, fused via RRF.
+        Main retrieval: BM25 + KG entity expansion + link walk, fused via weighted RRF.
+
+        Query intent is auto-classified unless overridden:
+          - KG-first:   factual/entity queries — boosts KG signal (weight 2x)
+          - BM25-first: procedural/narrative — boosts BM25 signal (weight 2x)
+          - Balanced:   equal weights
+
         Each returned chunk carries a provenance tag (bm25 / kg / link:hopN).
         """
+        if intent is None:
+            intent = classify_query(query)
+
         bm25_hits = self._bm25.search(query, limit=limit * 2)
         kg_hits = self._kg_ret.search(query, limit=limit * 2, as_of=as_of)
 
@@ -108,7 +130,8 @@ class LocusEngine:
         if use_links and bm25_hits:
             link_hits = self._walker.walk(bm25_hits[:3], depth=2, limit=limit)
 
-        fused = rrf_fuse([bm25_hits, kg_hits, link_hits], limit=limit)
+        weights = INTENT_WEIGHTS[intent]
+        fused = rrf_fuse([bm25_hits, kg_hits, link_hits], weights=weights, limit=limit)
 
         total_tokens = 0
         for chunk in fused:
@@ -123,7 +146,7 @@ class LocusEngine:
 
         check = self.budget.record(total_tokens)
         if check.status.value in ("critical", "warning", "trend"):
-            logger.warning("Budget alert: %s", check.message)
+            logger.warning("Budget alert [%s]: %s", intent.value, check.message)
 
         return fused
 
@@ -181,7 +204,7 @@ class LocusEngine:
         }
 
     # ------------------------------------------------------------------
-    # Session lifecycle (mirrors OMPA's session_start / stop pattern)
+    # Session lifecycle
     # ------------------------------------------------------------------
 
     def session_start(self) -> dict:

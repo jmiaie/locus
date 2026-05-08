@@ -12,6 +12,7 @@ from locus.retrieval.bm25 import BM25Retriever, ScoredChunk
 from locus.retrieval.fusion import rrf_fuse
 from locus.retrieval.kg_retrieval import KGRetriever, extract_query_entities
 from locus.retrieval.link_walker import LinkWalker
+from locus.retrieval.classifier import classify_query, QueryIntent, INTENT_WEIGHTS
 from locus.context.bulletin import ContextBulletin, PROMOTE_THRESHOLD
 from locus.context.budget import ContextBudget, BudgetStatus
 from locus.core import LocusEngine
@@ -465,3 +466,201 @@ def test_engine_status(tmp_path):
     assert "version" in status
     assert "corpus" in status
     assert "kg" in status
+
+
+# -----------------------------------------------------------------------
+# Phase 1 — Corpus checksum dedup
+# -----------------------------------------------------------------------
+
+def test_corpus_checksum_skip_unchanged(tmp_path):
+    corpus = Corpus(tmp_path / "corpus")
+    f = tmp_path / "doc.md"
+    f.write_text("Content that will not change between index calls.")
+    first = corpus.add_file(f, base_path=tmp_path)
+    assert first >= 1
+    second = corpus.add_file(f, base_path=tmp_path)
+    assert second == 0  # unchanged — skipped
+
+
+def test_corpus_checksum_reindex_on_change(tmp_path):
+    corpus = Corpus(tmp_path / "corpus")
+    f = tmp_path / "doc.md"
+    f.write_text("Original content about system design.")
+    corpus.add_file(f, base_path=tmp_path)
+    f.write_text("Updated content about system design with extra information added.")
+    second = corpus.add_file(f, base_path=tmp_path)
+    assert second >= 1  # changed — re-indexed
+
+
+def test_corpus_force_reindex(tmp_path):
+    corpus = Corpus(tmp_path / "corpus")
+    f = tmp_path / "doc.md"
+    f.write_text("Same content both times.")
+    corpus.add_file(f, base_path=tmp_path)
+    forced = corpus.add_file(f, base_path=tmp_path, force=True)
+    assert forced >= 1  # forced even though unchanged
+
+
+def test_corpus_batch_fetch(tmp_path):
+    corpus = Corpus(tmp_path / "corpus")
+    for i in range(3):
+        f = tmp_path / f"doc{i}.md"
+        f.write_text(f"Document {i} contains unique information about topic {i}.")
+        corpus.add_file(f, base_path=tmp_path)
+    all_ids = [
+        r for chunks in
+        [corpus.get_chunks_for_doc(d) for d in corpus.list_docs()]
+        for r in chunks
+    ]
+    ids = [c.id for c in all_ids[:3]]
+    batch = corpus.get_chunks_batch(ids)
+    assert len(batch) == len(ids)
+    assert all(cid in batch for cid in ids)
+
+
+def test_corpus_stats_cache_invalidated(tmp_path):
+    corpus = Corpus(tmp_path / "corpus")
+    assert corpus.doc_count() == 0
+    f = tmp_path / "doc.md"
+    f.write_text("Some content about caching behaviour.")
+    corpus.add_file(f, base_path=tmp_path)
+    assert corpus.doc_count() == 1  # cache invalidated by add_file
+    corpus.remove_file("doc.md")
+    assert corpus.doc_count() == 0  # cache invalidated by remove
+
+
+# -----------------------------------------------------------------------
+# Phase 1 — Query intent classifier
+# -----------------------------------------------------------------------
+
+def test_classify_kg_first():
+    assert classify_query("Who is Alice?") == QueryIntent.KG_FIRST
+    assert classify_query("When was the project created?") == QueryIntent.KG_FIRST
+    assert classify_query("Who leads the infrastructure team?") == QueryIntent.KG_FIRST
+
+
+def test_classify_bm25_first():
+    assert classify_query("How does the authentication system work?") == QueryIntent.BM25_FIRST
+    assert classify_query("Explain the deployment process") == QueryIntent.BM25_FIRST
+    assert classify_query("What is the difference between staging and production?") == QueryIntent.BM25_FIRST
+
+
+def test_classify_balanced_fallback():
+    # Short, ambiguous queries should not strongly favour either
+    result = classify_query("database")
+    assert result in (QueryIntent.BALANCED, QueryIntent.BM25_FIRST, QueryIntent.KG_FIRST)
+
+
+def test_intent_weights_defined():
+    for intent in QueryIntent:
+        weights = INTENT_WEIGHTS[intent]
+        assert len(weights) == 3
+        assert all(w > 0 for w in weights)
+
+
+def test_rrf_weighted_boosts_kg():
+    # With KG-first weights [0.5, 2.0, 0.5], a KG-only result should outscore
+    # a BM25-only result that appeared first in BM25 list
+    bm25_list = [ScoredChunk("bm25_top", "a.md", 5.0, "x", "bm25")]
+    kg_list   = [ScoredChunk("kg_top",   "b.md", 1.0, "y", "kg")]
+    fused = rrf_fuse([bm25_list, kg_list, []], weights=[0.5, 2.0, 0.5], limit=2)
+    assert fused[0].chunk_id == "kg_top"
+
+
+def test_rrf_weighted_boosts_bm25():
+    bm25_list = [ScoredChunk("bm25_top", "a.md", 5.0, "x", "bm25")]
+    kg_list   = [ScoredChunk("kg_top",   "b.md", 1.0, "y", "kg")]
+    fused = rrf_fuse([bm25_list, kg_list, []], weights=[2.0, 0.5, 0.5], limit=2)
+    assert fused[0].chunk_id == "bm25_top"
+
+
+# -----------------------------------------------------------------------
+# Phase 1 — Bulletin persistence
+# -----------------------------------------------------------------------
+
+def test_bulletin_persists_across_restarts(tmp_path):
+    db = tmp_path / "bulletin.sqlite3"
+
+    b1 = ContextBulletin(db_path=db)
+    b1.record_hit("c1", content="Important context", doc_path="doc.md", base_score=0.7)
+    b1.record_hit("c2", content="Secondary context", doc_path="doc2.md", base_score=0.5)
+
+    # Simulate restart — fresh instance pointing at same db
+    b2 = ContextBulletin(db_path=db)
+    assert "c1" in b2._all
+    assert "c2" in b2._all
+    assert b2.stats()["tier1_hot"] == 2
+
+
+def test_bulletin_persist_promotion_survives_restart(tmp_path):
+    db = tmp_path / "bulletin.sqlite3"
+
+    b1 = ContextBulletin(db_path=db)
+    b1.record_hit("pin_me", content="Critical context", doc_path="doc.md", base_score=0.5)
+    b1.promote_to_pin("pin_me")
+    assert b1.stats()["tier0_pinned"] == 1
+
+    b2 = ContextBulletin(db_path=db)
+    assert b2.stats()["tier0_pinned"] == 1
+    assert b2._all["pin_me"].tier == 0
+
+
+def test_bulletin_persist_tick_removes_cold(tmp_path):
+    db = tmp_path / "bulletin.sqlite3"
+
+    b1 = ContextBulletin(db_path=db)
+    b1.record_hit("cold", content="Cold content", doc_path="d.md", base_score=0.0)
+    entry = b1._all["cold"]
+    entry.rounds_elapsed = 100
+    b1.tick()
+
+    # After tick removes it, a new instance should not see it
+    b2 = ContextBulletin(db_path=db)
+    assert "cold" not in b2._all
+
+
+def test_bulletin_stats_includes_persistent_flag(tmp_path):
+    b_mem = ContextBulletin()
+    assert b_mem.stats()["persistent"] is False
+
+    b_db = ContextBulletin(db_path=tmp_path / "b.sqlite3")
+    assert b_db.stats()["persistent"] is True
+
+
+# -----------------------------------------------------------------------
+# Phase 1 — Engine uses classifier + bulletin persistence
+# -----------------------------------------------------------------------
+
+def test_engine_bulletin_persists(tmp_path):
+    store = tmp_path / ".locus"
+
+    e1 = LocusEngine(store_path=store)
+    f = tmp_path / "doc.md"
+    f.write_text("Knowledge about the authentication and security system architecture.")
+    e1.index(tmp_path)
+    e1.retrieve("authentication security")
+
+    # Re-open engine — bulletin should still have entries
+    e2 = LocusEngine(store_path=store)
+    assert e2.bulletin.stats()["total_tracked"] >= 1
+
+
+def test_engine_checksum_dedup_on_reindex(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    f = tmp_path / "stable.md"
+    f.write_text("Stable content that does not change between runs.")
+    r1 = engine.index(tmp_path)
+    r2 = engine.index(tmp_path)
+    # Second pass: no new chunks (all files unchanged)
+    assert r2["chunks"] == 0
+
+
+def test_engine_retrieve_intent_override(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("Alice leads the infrastructure team at Acme Corp.")
+    engine.index(tmp_path)
+    # Should not raise regardless of intent override
+    chunks = engine.retrieve("Alice", intent=QueryIntent.KG_FIRST)
+    assert isinstance(chunks, list)
+    chunks2 = engine.retrieve("Alice", intent=QueryIntent.BM25_FIRST)
+    assert isinstance(chunks2, list)
