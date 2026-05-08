@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Test
+        run: pytest tests/ -v --tb=short
+
+  lint-imports:
+    name: Import check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Verify all modules import cleanly
+        run: |
+          python -c "
+          import locus
+          from locus import LocusEngine, LocusCluster, LocusWatcher, LocusEval
+          from locus import OMPABridge, LocusDoctor, KGExporter
+          from locus.mcp.server import _list_tools, _call_tool
+          from locus.mcp.prompts import list_prompts, render_prompt
+          from locus.cluster import LocusCluster
+          from locus.bridge.ompa import OMPABridge
+          from locus.eval import LocusEval
+          from locus.doctor import LocusDoctor
+          from locus.export import KGExporter
+          from locus.watcher import LocusWatcher
+          print('All imports OK')
+          "
