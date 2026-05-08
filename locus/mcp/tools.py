@@ -204,6 +204,42 @@ TOOLS: dict[str, dict] = {
         },
     },
     # ------------------------------------------------------------------
+    # Phase 6 — Watch, Bridge, Eval
+    # ------------------------------------------------------------------
+    "locus_ingest_ompa": {
+        "description": (
+            "Import an OMPA vault into the Locus store. "
+            "Indexes all markdown files and copies KG triples directly from "
+            "OMPA's .palace/knowledge_graph.sqlite3 (same schema — zero transformation). "
+            "Safe to re-run; unchanged files are skipped via checksum dedup."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "vault_path": {"type": "string", "description": "Path to the OMPA vault root."},
+                "pattern":    {"type": "string", "default": "**/*.md"},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["vault_path"],
+        },
+    },
+    "locus_benchmark": {
+        "description": (
+            "Measure retrieval quality against a JSON QA file. "
+            "Returns Recall@K and MRR. "
+            "QA format: [{\"query\": \"...\", \"expected_docs\": [\"path/to/doc.md\"]}]"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "qa_file":  {"type": "string", "description": "Path to JSON QA file."},
+                "k_values": {"type": "array", "items": {"type": "integer"}, "default": [1, 3, 5]},
+                "store_path": {"type": "string", "default": ".locus"},
+            },
+            "required": ["qa_file"],
+        },
+    },
+    # ------------------------------------------------------------------
     # Phase 5 — Cluster (multi-node)
     # ------------------------------------------------------------------
     "locus_cluster_retrieve": {

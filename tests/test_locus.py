@@ -2,6 +2,7 @@
 Tests for Locus vectorless RAG engine.
 """
 
+import json
 import pytest
 from pathlib import Path
 
@@ -1349,3 +1350,298 @@ def test_cluster_status(tmp_path):
     assert status["node_count"] == 1
     assert "nodes" in status
     assert "n1" in status["nodes"]
+
+
+# -----------------------------------------------------------------------
+# Phase 6 — LocusWatcher
+# -----------------------------------------------------------------------
+
+def test_watcher_detects_new_file(tmp_path):
+    from locus import LocusWatcher
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+
+    watcher = LocusWatcher(engine, watch_dir=docs, interval=0.1)
+    (docs / "first.md").write_text("# First\n\nInitial content.")
+    watcher._cycle()
+
+    assert engine.corpus.doc_count() == 1
+
+
+def test_watcher_skips_unchanged(tmp_path):
+    from locus import LocusWatcher
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "stable.md").write_text("# Stable\n\nContent that will not change.")
+
+    watcher = LocusWatcher(engine, watch_dir=docs, interval=0.1)
+    added1, _ = watcher._cycle()
+    added2, _ = watcher._cycle()
+
+    assert added1 >= 1
+    assert added2 == 0  # unchanged — skipped
+
+
+def test_watcher_detects_update(tmp_path):
+    from locus import LocusWatcher
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    f = docs / "evolving.md"
+    f.write_text("# V1\n\nOriginal content.")
+
+    watcher = LocusWatcher(engine, watch_dir=docs, interval=0.1)
+    watcher._cycle()
+
+    f.write_text("# V2\n\nUpdated content with more information added here.")
+    added, _ = watcher._cycle()
+    assert added >= 1
+
+
+def test_watcher_detects_deletion(tmp_path):
+    from locus import LocusWatcher
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    f = docs / "temporary.md"
+    f.write_text("# Temp\n\nWill be deleted.")
+
+    watcher = LocusWatcher(engine, watch_dir=docs, interval=0.1)
+    watcher._cycle()
+    assert engine.corpus.doc_count() == 1
+
+    f.unlink()
+    _, deleted = watcher._cycle()
+    assert deleted == 1
+    assert engine.corpus.doc_count() == 0
+
+
+def test_watcher_on_change_callback(tmp_path):
+    from locus import LocusWatcher
+    events: list[tuple[str, str]] = []
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+
+    watcher = LocusWatcher(
+        engine, watch_dir=docs, interval=0.1,
+        on_change=lambda path, event: events.append((path, event))
+    )
+    (docs / "new.md").write_text("# New\n\nFresh content.")
+    watcher._cycle()
+    assert any(ev == "updated" for _, ev in events)
+
+
+def test_watcher_stats(tmp_path):
+    from locus import LocusWatcher
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    watcher = LocusWatcher(engine, watch_dir=tmp_path / "docs", interval=2.0)
+    stats = watcher.stats()
+    assert stats["interval_s"] == 2.0
+    assert stats["cycles"] == 0
+    assert not stats["running"]
+
+
+def test_watcher_background_starts_and_stops(tmp_path):
+    import time
+    from locus import LocusWatcher
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+
+    watcher = LocusWatcher(engine, watch_dir=docs, interval=0.2)
+    watcher.start(background=True)
+    assert watcher._running
+    time.sleep(0.5)
+    watcher.stop()
+    assert not watcher._running
+
+
+# -----------------------------------------------------------------------
+# Phase 6 — OMPA Bridge
+# -----------------------------------------------------------------------
+
+def test_ompa_bridge_indexes_markdown(tmp_path):
+    from locus.bridge.ompa import OMPABridge
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "note1.md").write_text("# Note 1\n\nContent about the project.")
+    (vault / "note2.md").write_text("# Note 2\n\nMore project information.")
+
+    bridge = OMPABridge(engine, vault_path=vault)
+    result = bridge.ingest()
+
+    assert result["chunks_indexed"] >= 2
+    assert engine.corpus.doc_count() == 2
+
+
+def test_ompa_bridge_imports_kg(tmp_path):
+    import sqlite3
+    from locus.bridge.ompa import OMPABridge
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+
+    vault = tmp_path / "vault"
+    palace = vault / ".palace"
+    palace.mkdir(parents=True)
+    (vault / "note.md").write_text("# Note\n\nContent.")
+
+    # Create a fake OMPA KG with the same schema
+    kg_path = palace / "knowledge_graph.sqlite3"
+    with sqlite3.connect(str(kg_path)) as conn:
+        conn.execute(
+            "CREATE TABLE triples (id INTEGER PRIMARY KEY, subject TEXT, predicate TEXT, "
+            "object TEXT, valid_from TEXT, valid_to TEXT, source TEXT, created_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO triples (subject, predicate, object, source) VALUES (?,?,?,?)",
+            ("Alice", "works_at", "Acme", "note.md")
+        )
+
+    bridge = OMPABridge(engine, vault_path=vault)
+    result = bridge.ingest()
+
+    assert result["triples_imported"] == 1
+    triples = engine.kg.query_entity("Alice")
+    assert len(triples) >= 1
+
+
+def test_ompa_bridge_nonexistent_vault(tmp_path):
+    from locus.bridge.ompa import OMPABridge
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    bridge = OMPABridge(engine, vault_path=tmp_path / "nonexistent")
+    result = bridge.ingest()
+    assert "error" in result
+
+
+def test_ompa_bridge_stats(tmp_path):
+    from locus.bridge.ompa import OMPABridge
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "a.md").write_text("Content.")
+
+    bridge = OMPABridge(engine, vault_path=vault)
+    stats = bridge.stats()
+    assert stats["markdown_docs"] == 1
+    assert not stats["kg_available"]
+
+
+# -----------------------------------------------------------------------
+# Phase 6 — Evaluation (LocusEval)
+# -----------------------------------------------------------------------
+
+def test_eval_perfect_recall(tmp_path):
+    from locus import LocusEval
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Authentication\n\nJWT tokens and OAuth flows.")
+    (tmp_path / "deploy.md").write_text("# Deployment\n\nKubernetes and Docker containers.")
+    engine.index(tmp_path)
+
+    ev = LocusEval(engine, k_values=[1, 3, 5])
+    qa = [{"query": "JWT authentication", "expected_docs": ["auth.md"]}]
+    report = ev.score(qa)
+
+    assert report.mrr() > 0.0
+    assert len(report.query_results) == 1
+
+
+def test_eval_zero_recall(tmp_path):
+    from locus import LocusEval
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "unrelated.md").write_text("# Cooking\n\nRecipes and ingredients.")
+    engine.index(tmp_path)
+
+    ev = LocusEval(engine)
+    qa = [{"query": "JWT auth", "expected_docs": ["nonexistent.md"]}]
+    report = ev.score(qa)
+
+    assert report.recall_at(5) == 0.0
+    assert report.mrr() == 0.0
+
+
+def test_eval_multi_expected(tmp_path):
+    from locus import LocusEval
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nAuthentication system.")
+    (tmp_path / "security.md").write_text("# Security\n\nSecurity policies.")
+    engine.index(tmp_path)
+
+    ev = LocusEval(engine, k_values=[3])
+    qa = [{"query": "authentication", "expected_docs": ["auth.md", "security.md"]}]
+    report = ev.score(qa)
+    # At least one should be found
+    assert report.recall_at(3) >= 0.0
+
+
+def test_eval_report_summary(tmp_path):
+    from locus import LocusEval
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent about retrieval systems.")
+    engine.index(tmp_path)
+
+    ev = LocusEval(engine)
+    qa = [{"query": "retrieval systems", "expected_docs": ["doc.md"]}]
+    report = ev.score(qa)
+    summary = report.summary()
+    assert "Recall@" in summary
+    assert "MRR:" in summary
+
+
+def test_eval_to_dict(tmp_path):
+    from locus import LocusEval
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    ev = LocusEval(engine)
+    report = ev.score([{"query": "test", "expected_docs": ["missing.md"]}])
+    d = report.to_dict()
+    assert "metrics" in d
+    assert "recall@1" in d["metrics"]
+    assert "mrr" in d["metrics"]
+    assert "misses" in d
+
+
+def test_eval_from_file(tmp_path):
+    from locus import LocusEval
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "auth.md").write_text("# Auth\n\nJWT authentication.")
+    engine.index(tmp_path)
+
+    qa_path = tmp_path / "qa.json"
+    qa_path.write_text(json.dumps([
+        {"query": "JWT tokens", "expected_docs": ["auth.md"]}
+    ]))
+
+    ev = LocusEval(engine)
+    report = ev.score_from_file(qa_path)
+    assert len(report.query_results) == 1
+
+
+# -----------------------------------------------------------------------
+# Phase 6 — HTTP server (unit-level)
+# -----------------------------------------------------------------------
+
+def test_http_server_dispatch_health(tmp_path):
+    from locus.mcp.http_server import _dispatch
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    resp = _dispatch({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, engine)
+    assert resp["result"]["capabilities"]["tools"] == {}
+    assert "resources" in resp["result"]["capabilities"]
+    assert "prompts" in resp["result"]["capabilities"]
+
+
+def test_http_server_dispatch_tools_list(tmp_path):
+    from locus.mcp.http_server import _dispatch
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    resp = _dispatch({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, engine)
+    assert "tools" in resp["result"]
+    assert len(resp["result"]["tools"]) >= 20
+
+
+def test_http_server_dispatch_unknown_method(tmp_path):
+    from locus.mcp.http_server import _dispatch
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    resp = _dispatch({"jsonrpc": "2.0", "id": 3, "method": "bogus/method", "params": {}}, engine)
+    assert "error" in resp

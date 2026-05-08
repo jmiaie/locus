@@ -153,6 +153,18 @@ def _call_tool(name: str, arguments: dict) -> dict:
         if name == "locus_suggest_aliases":
             return engine.suggest_aliases(threshold=float(arguments.get("threshold", 0.75)))
 
+        if name == "locus_ingest_ompa":
+            from ..bridge.ompa import OMPABridge
+            bridge = OMPABridge(engine, vault_path=arguments["vault_path"])
+            return bridge.ingest(pattern=arguments.get("pattern", "**/*.md"))
+
+        if name == "locus_benchmark":
+            from ..eval import LocusEval
+            k_values = arguments.get("k_values", [1, 3, 5])
+            ev = LocusEval(engine, k_values=k_values)
+            report = ev.score_from_file(arguments["qa_file"])
+            return report.to_dict()
+
         return {"error": f"Unhandled tool: {name}"}
 
     except KeyError as e:

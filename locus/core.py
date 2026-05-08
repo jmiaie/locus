@@ -37,7 +37,7 @@ from .context.budget import ContextBudget
 
 logger = logging.getLogger(__name__)
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 # Fixed weights appended after intent weights: [structural, recency]
 _STRUCTURAL_WEIGHT = 1.0
