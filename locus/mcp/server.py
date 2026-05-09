@@ -17,16 +17,21 @@ import json
 import logging
 import sys
 
+from typing import TYPE_CHECKING
+
 from ..core import LocusEngine, __version__
 from .tools import TOOLS
 from .prompts import list_prompts, render_prompt
+
+if TYPE_CHECKING:
+    from ..cluster import LocusCluster
 
 logger = logging.getLogger(__name__)
 
 # Per-store engine cache
 _engines: dict[str, LocusEngine] = {}
 # Per-registry cluster cache
-_clusters: dict[str, object] = {}   # LocusCluster, typed as object to avoid import cycle
+_clusters: dict[str, "LocusCluster"] = {}
 
 
 def _get_engine(store_path: str = ".locus") -> LocusEngine:
@@ -205,7 +210,7 @@ def _call_tool(name: str, arguments: dict) -> dict:
             report = ev.score_from_file(arguments["qa_file"])
             return report.to_dict()
 
-        # Phase 9 — reasoning, corpus inspection, GitHub bridge
+        # Reasoning, corpus inspection, GitHub bridge
         if name == "locus_reason":
             return engine.reason(
                 question=arguments["question"],
@@ -240,7 +245,7 @@ def _call_tool(name: str, arguments: dict) -> dict:
                 pattern=arguments.get("pattern", "*.md"),
             )
 
-        # Phase 10 — query intelligence + snapshot
+        # Query intelligence & snapshot
         if name == "locus_expand_query":
             return engine.expand_query(
                 query=arguments["query"],
@@ -289,7 +294,7 @@ def _call_tool(name: str, arguments: dict) -> dict:
             from ..snapshot import LocusSnapshot
             return LocusSnapshot.inspect(arguments["snapshot_path"])
 
-        # Phase 11 — document intelligence
+        # Document intelligence
         if name == "locus_related_docs":
             return {
                 "doc_path": arguments["doc_path"],
@@ -305,7 +310,7 @@ def _call_tool(name: str, arguments: dict) -> dict:
                 pattern=arguments.get("pattern", "**/*.md"),
             )
 
-        # Phase 12 — annotations & feedback
+        # Annotations & feedback
         if name == "locus_annotate":
             return engine.annotate(
                 chunk_id=arguments["chunk_id"],

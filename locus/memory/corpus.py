@@ -1,9 +1,8 @@
 """
 Corpus — SQLite-backed document store with inverted term index for BM25.
 
-Phase 2 additions:
-  - section_aware parameter passed through to Chunker
-  - Migration-safe schema (adds columns to existing dbs)
+Supports section-aware chunking, checksum deduplication, and batch retrieval.
+Schema is migration-safe (additive ALTER TABLE for new columns).
 """
 
 import hashlib
@@ -82,7 +81,7 @@ class Corpus:
             if "checksum" not in cols:
                 conn.execute("ALTER TABLE doc_stats ADD COLUMN checksum TEXT")
 
-    def _conn(self):
+    def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
 
     def _invalidate_stats(self) -> None:
@@ -120,7 +119,7 @@ class Corpus:
                 if checksum == self._stored_checksum(doc_id):
                     return 0
             except Exception:
-                pass
+                logger.debug("Checksum check failed for %s, re-indexing", path)
 
         self._remove_doc(doc_id)
         for chunk in chunks:
@@ -199,6 +198,13 @@ class Corpus:
     # Retrieval helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _row_to_chunk(row: tuple) -> Chunk:
+        return Chunk(
+            id=row[0], doc_path=row[1], content=row[2],
+            start_word=row[3], metadata=json.loads(row[4] or "{}"),
+        )
+
     def get_chunk(self, chunk_id: str) -> Optional[Chunk]:
         with self._conn() as conn:
             row = conn.execute(
@@ -206,12 +212,7 @@ class Corpus:
                 "FROM chunks WHERE id = ?",
                 (chunk_id,),
             ).fetchone()
-        if not row:
-            return None
-        return Chunk(
-            id=row[0], doc_path=row[1], content=row[2],
-            start_word=row[3], metadata=json.loads(row[4] or "{}"),
-        )
+        return self._row_to_chunk(row) if row else None
 
     def get_chunks_batch(self, chunk_ids: list[str]) -> dict[str, Chunk]:
         """Fetch multiple chunks in a single query."""
@@ -224,13 +225,7 @@ class Corpus:
                 f"FROM chunks WHERE id IN ({ph})",
                 chunk_ids,
             ).fetchall()
-        return {
-            r[0]: Chunk(
-                id=r[0], doc_path=r[1], content=r[2],
-                start_word=r[3], metadata=json.loads(r[4] or "{}"),
-            )
-            for r in rows
-        }
+        return {r[0]: self._row_to_chunk(r) for r in rows}
 
     def get_chunks_for_doc(self, doc_path: str) -> list[Chunk]:
         with self._conn() as conn:
@@ -239,13 +234,7 @@ class Corpus:
                 "FROM chunks WHERE doc_path = ? ORDER BY start_word",
                 (doc_path,),
             ).fetchall()
-        return [
-            Chunk(
-                id=r[0], doc_path=r[1], content=r[2],
-                start_word=r[3], metadata=json.loads(r[4] or "{}"),
-            )
-            for r in rows
-        ]
+        return [self._row_to_chunk(r) for r in rows]
 
     def get_posting_list(self, term: str) -> dict[str, float]:
         with self._conn() as conn:
@@ -290,7 +279,7 @@ class Corpus:
         }
 
     # ------------------------------------------------------------------
-    # Inspection helpers (Phase 9)
+    # Inspection helpers
     # ------------------------------------------------------------------
 
     def top_terms(self, limit: int = 20) -> list[dict]:

@@ -48,7 +48,7 @@ class EntityResolver:
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(_SCHEMA)
 
-    def _conn(self):
+    def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
 
     def resolve(self, entity: str) -> str:

@@ -2,11 +2,8 @@
 Temporal knowledge graph — SQLite-backed triple store.
 Standalone adaptation of OMPA's KnowledgeGraph with validity windows.
 
-Phase 2/3 additions:
-  - Optional EntityResolver for transparent alias resolution
-  - Prose triple extraction via extractor.py integrated into populate_from_text
-  - find_contradictions() — surfaces conflicting triples
-  - all_entities() — for alias suggestion
+Entity aliases are resolved transparently via an optional EntityResolver.
+Prose triples are extracted automatically during indexing via extractor.py.
 """
 
 import re
@@ -64,7 +61,7 @@ class TemporalKG:
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(self._SCHEMA)
 
-    def _conn(self):
+    def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
 
     def _resolve(self, entity: str) -> str:
@@ -79,9 +76,9 @@ class TemporalKG:
         subject: str,
         predicate: str,
         object_: str,
-        valid_from: str = None,
-        valid_to: str = None,
-        source: str = None,
+        valid_from: str | None = None,
+        valid_to: str | None = None,
+        source: str | None = None,
     ) -> None:
         subject = self._resolve(subject.strip())
         object_ = self._resolve(object_.strip())
@@ -97,7 +94,7 @@ class TemporalKG:
     # Read
     # ------------------------------------------------------------------
 
-    def query_entity(self, entity: str, as_of: str = None) -> list[Triple]:
+    def query_entity(self, entity: str, as_of: str | None = None) -> list[Triple]:
         entity = self._resolve(entity)
         sql = (
             "SELECT subject, predicate, object, valid_from, valid_to, source "
@@ -125,7 +122,7 @@ class TemporalKG:
             ).fetchall()
         return [Triple(*row) for row in rows]
 
-    def sources_for_entity(self, entity: str, as_of: str = None) -> list[str]:
+    def sources_for_entity(self, entity: str, as_of: str | None = None) -> list[str]:
         entity = self._resolve(entity)
         sql = (
             "SELECT DISTINCT source FROM triples "
@@ -167,7 +164,7 @@ class TemporalKG:
     def populate_from_text(
         self,
         text: str,
-        source: str = None,
+        source: str | None = None,
         extract_prose: bool = True,
     ) -> int:
         """
@@ -213,7 +210,7 @@ class TemporalKG:
         return self.populate_from_text(text, source=source, extract_prose=extract_prose)
 
     # ------------------------------------------------------------------
-    # Graph traversal & pattern match (Phase 7)
+    # Graph traversal & pattern match
     # ------------------------------------------------------------------
 
     def traverse(
@@ -273,7 +270,7 @@ class TemporalKG:
         subject: str = "*",
         predicate: str = "*",
         obj: str = "*",
-        as_of: str = None,
+        as_of: str | None = None,
     ) -> list[Triple]:
         """
         Pattern match over the KG with wildcard support.

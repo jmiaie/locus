@@ -38,7 +38,7 @@ class RelevanceFeedback:
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(self._SCHEMA)
 
-    def _conn(self):
+    def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
 
     @staticmethod

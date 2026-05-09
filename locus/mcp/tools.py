@@ -24,9 +24,10 @@ TOOLS: dict[str, dict] = {
     },
     "locus_retrieve": {
         "description": (
-            "Five-signal retrieval: BM25 + KG entity expansion + link walking + "
-            "frontmatter structural matching + recency prior, fused via weighted RRF. "
-            "Each result carries a provenance tag (bm25 / kg / link:hopN / structural / recency)."
+            "Six-signal retrieval: BM25 + KG entity expansion + link walking + "
+            "frontmatter structural matching + recency prior + link popularity, "
+            "fused via weighted RRF. "
+            "Each result carries a provenance tag (bm25 / kg / link:hopN / structural / recency / link_pop)."
         ),
         "input_schema": {
             "type": "object",
@@ -203,12 +204,6 @@ TOOLS: dict[str, dict] = {
             "required": ["path"],
         },
     },
-    # ------------------------------------------------------------------
-    # Phase 6 — Watch, Bridge, Eval
-    # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
-    # Phase 8 — Re-ranking, context packing, cache, prepare_context
-    # ------------------------------------------------------------------
     "locus_prepare_context": {
         "description": (
             "All-in-one context preparation for LLM agents. "
@@ -244,7 +239,7 @@ TOOLS: dict[str, dict] = {
         },
     },
     # ------------------------------------------------------------------
-    # Phase 7 — KG traversal, doctor, export
+    # KG traversal, doctor, export
     # ------------------------------------------------------------------
     "locus_kg_traverse": {
         "description": (
@@ -343,7 +338,7 @@ TOOLS: dict[str, dict] = {
         },
     },
     # ------------------------------------------------------------------
-    # Phase 5 — Cluster (multi-node)
+    # Cluster (multi-node)
     # ------------------------------------------------------------------
     "locus_cluster_retrieve": {
         "description": (
@@ -397,7 +392,7 @@ TOOLS: dict[str, dict] = {
         },
     },
     # ------------------------------------------------------------------
-    # Phase 9 — Reasoning, corpus inspection, GitHub bridge
+    # Reasoning, corpus inspection, GitHub bridge
     # ------------------------------------------------------------------
     "locus_reason": {
         "description": (
@@ -485,7 +480,7 @@ TOOLS: dict[str, dict] = {
         },
     },
     # ------------------------------------------------------------------
-    # Phase 10 — Query intelligence + snapshot
+    # Query intelligence & snapshot
     # ------------------------------------------------------------------
     "locus_expand_query": {
         "description": (
@@ -579,7 +574,7 @@ TOOLS: dict[str, dict] = {
         },
     },
     # ------------------------------------------------------------------
-    # Phase 11 — Document intelligence
+    # Document intelligence
     # ------------------------------------------------------------------
     "locus_related_docs": {
         "description": (
@@ -614,7 +609,7 @@ TOOLS: dict[str, dict] = {
         },
     },
     # ------------------------------------------------------------------
-    # Phase 12 — Annotations & feedback
+    # Annotations & feedback
     # ------------------------------------------------------------------
     "locus_annotate": {
         "description": (

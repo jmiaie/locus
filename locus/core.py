@@ -1,28 +1,23 @@
 """
 LocusEngine — main orchestrator for Locus vectorless RAG.
 
-Five-signal retrieval pipeline, no embeddings required:
-  1. BM25        — probabilistic keyword retrieval
-  2. KG          — entity expansion via temporal knowledge graph
-  3. LinkWalk    — wikilink/citation graph traversal from top BM25 hits
-  4. Structural  — frontmatter date / tag / type matching (Phase 2)
-  5. Recency     — exponential freshness prior (Phase 2)
+Six-signal retrieval pipeline, no embeddings required:
+  1. BM25           — probabilistic keyword retrieval
+  2. KG             — entity expansion via temporal knowledge graph
+  3. LinkWalk       — wikilink/citation graph traversal from top BM25 hits
+  4. Structural     — frontmatter date / tag / type matching
+  5. Recency        — exponential freshness prior
+  6. LinkPopularity — inbound wikilink count
 
 Signals 1-3 are weighted by query intent (KG-first / BM25-first / balanced).
-Signals 4-5 use fixed weights (structural=1.0, recency=0.3).
-All five are fused via weighted Reciprocal Rank Fusion.
-
-Phase 3 additions:
-  - EntityResolver for transparent alias de-duplication in the KG
-  - Prose triple extraction from natural language text
-  - Contradiction detection across KG triples
-  - alias management API (add_alias, suggest_aliases)
+Signals 4-6 use fixed weights (structural=1.0, recency=0.3, link_pop=0.2).
+All six are fused via weighted Reciprocal Rank Fusion.
 """
 
 import logging
 from pathlib import Path
 
-from .memory.corpus import Corpus
+from .memory.corpus import Corpus, _EXCLUDE
 from .memory.knowledge_graph import TemporalKG
 from .memory.entity_resolver import EntityResolver
 from .retrieval.bm25 import BM25Retriever, ScoredChunk
@@ -72,7 +67,7 @@ class LocusEngine:
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
 
-        # Phase 3: entity resolver (must come before KG)
+        # Entity resolver must be initialised before KG (transparent alias lookups)
         self.resolver = EntityResolver(self.store_path / "resolver.sqlite3")
 
         self.corpus = Corpus(self.store_path / "corpus", section_aware=True)
@@ -90,20 +85,15 @@ class LocusEngine:
         self._structural = StructuralRetriever(self.corpus)
         self._recency = RecencyRetriever(self.corpus)
         self._link_pop = LinkPopularityRetriever(self.corpus)
-        self._reranker = LocusReranker(self.corpus, kg=self.kg)  # Phase 8
-        self._packer = ContextPacker()                            # Phase 8
-        self._hooks = LocusHooks()                                # Phase 9
-        self._reasoner = LocusReasoner(self.kg)                   # Phase 9
-        self._expander = QueryExpander(self.kg, self.resolver)    # Phase 10
-        self._similarity = DocSimilarity(self.corpus)             # Phase 11
-        self._diff = CorpusDiff(self.corpus)                      # Phase 11
-        self.annotations = AnnotationStore(                       # Phase 12
-            self.store_path / "annotations.sqlite3"
-        )
-        self.feedback = RelevanceFeedback(                        # Phase 12
-            self.store_path / "feedback.sqlite3"
-        )
-        # Wire feedback into reranker
+        self._reranker = LocusReranker(self.corpus, kg=self.kg)
+        self._packer = ContextPacker()
+        self._hooks = LocusHooks()
+        self._reasoner = LocusReasoner(self.kg)
+        self._expander = QueryExpander(self.kg, self.resolver)
+        self._similarity = DocSimilarity(self.corpus)
+        self._diff = CorpusDiff(self.corpus)
+        self.annotations = AnnotationStore(self.store_path / "annotations.sqlite3")
+        self.feedback = RelevanceFeedback(self.store_path / "feedback.sqlite3")
         self._reranker.feedback = self.feedback
 
         # Query result cache — invalidated on corpus changes
@@ -141,7 +131,7 @@ class LocusEngine:
         chunks = self.corpus.add_directory(path, pattern=pattern)
         triples = 0
         for f in path.glob(pattern):
-            if any(ex in f.parts for ex in {".locus", ".palace", ".git", ".obsidian"}):
+            if any(ex in f.parts for ex in _EXCLUDE):
                 continue
             triples += self.kg.populate_from_file(f, base_path=path)
         self._invalidate_cache()
@@ -243,7 +233,7 @@ class LocusEngine:
         return fused
 
     # ------------------------------------------------------------------
-    # Phase 8 — rerank, pack, prepare, confidence, cache helpers
+    # Reranking, context packing & confidence
     # ------------------------------------------------------------------
 
     def rerank(
@@ -324,8 +314,7 @@ class LocusEngine:
         }
 
     # ------------------------------------------------------------------
-    # Cache management (Phase 8)
-    # ------------------------------------------------------------------
+    # Cache management
     # ------------------------------------------------------------------
 
     def _cache_key(self, query: str, limit: int, as_of: str | None,
@@ -411,7 +400,7 @@ class LocusEngine:
         }
 
     # ------------------------------------------------------------------
-    # Phase 3 — Entity resolution
+    # Entity resolution
     # ------------------------------------------------------------------
 
     def add_alias(self, alias: str, canonical: str) -> dict:
@@ -433,7 +422,7 @@ class LocusEngine:
         return {"aliases": self.resolver.list_aliases()}
 
     # ------------------------------------------------------------------
-    # Phase 3 — Contradiction detection
+    # Contradiction detection
     # ------------------------------------------------------------------
 
     def find_contradictions(self, entity: str = None) -> dict:
@@ -449,11 +438,7 @@ class LocusEngine:
         }
 
     # ------------------------------------------------------------------
-    # Session lifecycle
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Phase 4 — Explainability
+    # Explainability
     # ------------------------------------------------------------------
 
     def explain(self, chunk_id: str, query: str = None) -> dict:
@@ -564,7 +549,7 @@ class LocusEngine:
         return result
 
     # ------------------------------------------------------------------
-    # Phase 7 — KG traversal, doctor, export
+    # KG traversal & export
     # ------------------------------------------------------------------
 
     def kg_traverse(
@@ -617,7 +602,7 @@ class LocusEngine:
         return {"path": path, "triples_exported": count, "format": fmt or "auto"}
 
     # ------------------------------------------------------------------
-    # Phase 9 — reasoning, hooks, corpus inspection
+    # Reasoning & corpus inspection
     # ------------------------------------------------------------------
 
     def reason(self, question: str, max_depth: int = 3) -> dict:
@@ -664,7 +649,7 @@ class LocusEngine:
         return self.corpus.top_terms(limit=limit)
 
     # ------------------------------------------------------------------
-    # Phase 11 — Document intelligence
+    # Document intelligence
     # ------------------------------------------------------------------
 
     def related_docs(self, doc_path: str, limit: int = 5) -> list[dict]:
@@ -684,7 +669,7 @@ class LocusEngine:
         return self._diff.diff(path, pattern=pattern)
 
     # ------------------------------------------------------------------
-    # Phase 12 — Annotations & feedback
+    # Annotations & feedback
     # ------------------------------------------------------------------
 
     def annotate(self, chunk_id: str, label: str, note: str | None = None) -> dict:
@@ -711,7 +696,7 @@ class LocusEngine:
         return {"chunk_id": chunk_id, "query": query, "signal": "irrelevant"}
 
     # ------------------------------------------------------------------
-    # Phase 10 — Query intelligence + snapshot
+    # Query intelligence & snapshot
     # ------------------------------------------------------------------
 
     def expand_query(self, query: str, max_expansions: int = 5) -> dict:

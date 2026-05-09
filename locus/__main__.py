@@ -76,7 +76,7 @@ def main() -> None:
     p_serve.add_argument("--token", default=None, help="Optional Bearer token")
 
     # ----------------------------------------------------------------
-    # Phase 6 — Watch
+    # Watch
     # ----------------------------------------------------------------
     p_watch = sub.add_parser("watch", help="Watch a directory and auto-reindex changes")
     p_watch.add_argument("path")
@@ -84,17 +84,17 @@ def main() -> None:
     p_watch.add_argument("--pattern",  default="**/*.md")
 
     # ----------------------------------------------------------------
-    # Phase 6 — OMPA bridge
+    # OMPA bridge
     # ----------------------------------------------------------------
     p_ompa = sub.add_parser("ingest-ompa", help="Import an OMPA vault into Locus")
     p_ompa.add_argument("vault_path", help="Path to OMPA vault root")
     p_ompa.add_argument("--pattern",  default="**/*.md")
 
     # ----------------------------------------------------------------
-    # Phase 6 — Evaluation
+    # Evaluation
     # ----------------------------------------------------------------
     # ----------------------------------------------------------------
-    # Phase 9 — Reasoning, corpus inspection, GitHub bridge
+    # Reasoning, corpus inspection, GitHub bridge
     # ----------------------------------------------------------------
     p_reason = sub.add_parser("reason", help="Multi-hop KG reasoning for a question")
     p_reason.add_argument("question")
@@ -121,7 +121,7 @@ def main() -> None:
     p_gh.add_argument("--cache-dir", dest="cache_dir", default=None)
 
     # ----------------------------------------------------------------
-    # Phase 11 — Document intelligence
+    # Document intelligence
     # ----------------------------------------------------------------
     p_related = sub.add_parser("related", help="Find documents similar to a given doc")
     p_related.add_argument("doc_path")
@@ -132,7 +132,7 @@ def main() -> None:
     p_diff.add_argument("--pattern", default="**/*.md")
 
     # ----------------------------------------------------------------
-    # Phase 12 — Annotations & feedback
+    # Annotations & feedback
     # ----------------------------------------------------------------
     p_ann = sub.add_parser("annotate", help="Attach a label to a chunk")
     p_ann.add_argument("chunk_id")
@@ -151,7 +151,7 @@ def main() -> None:
     p_irrelevant.add_argument("query")
 
     # ----------------------------------------------------------------
-    # Phase 10 — Query intelligence + snapshot
+    # Query intelligence & snapshot
     # ----------------------------------------------------------------
     p_expand = sub.add_parser("expand", help="Expand a query using KG aliases and neighbours")
     p_expand.add_argument("query")
@@ -300,7 +300,7 @@ def main() -> None:
         print(json.dumps(engine.sync(args.path, pattern=args.pattern), indent=2))
 
     # ----------------------------------------------------------------
-    # Phase 6 commands
+    # Watch, bridge, eval commands
     # ----------------------------------------------------------------
     elif args.cmd == "watch":
         import logging
@@ -380,7 +380,7 @@ def main() -> None:
         print(report.summary())
 
     # ----------------------------------------------------------------
-    # Phase 10 commands
+    # Query intelligence & snapshot commands
     # ----------------------------------------------------------------
     elif args.cmd == "related":
         print(json.dumps(engine.related_docs(args.doc_path, limit=args.limit), indent=2))

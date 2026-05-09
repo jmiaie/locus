@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .memory.corpus import Corpus
 
-_EXCLUDE = {".locus", ".palace", ".git", ".obsidian", "__pycache__", "node_modules"}
+from .memory.corpus import _EXCLUDE
 
 
 class CorpusDiff:

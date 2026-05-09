@@ -117,7 +117,7 @@ class LocusReranker:
                     fresh = self._freshness(doc_date, now)
                     boost += fresh * w.freshness
 
-            # --- Relevance feedback boost (Phase 12) ---
+            # --- Relevance feedback boost ---
             if self.feedback:
                 boost += self.feedback.score_adjustment(chunk.chunk_id, query)
 
