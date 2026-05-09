@@ -34,8 +34,9 @@ Changelog  = "https://github.com/jmiaie/locus/blob/main/CHANGELOG.md"
 Issues     = "https://github.com/jmiaie/locus/issues"
 
 [project.optional-dependencies]
-ompa = ["ompa>=0.3.0"]
-dev  = ["pytest>=7.0", "pytest-cov"]
+ompa  = ["ompa>=0.3.0"]
+dev   = ["pytest>=7.0", "pytest-cov"]
+bench = ["rank_bm25>=0.2.2"]
 
 [project.scripts]
 locus = "locus.__main__:main"
