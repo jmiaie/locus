@@ -45,6 +45,7 @@ class AblationResult:
     mrr: float
     avg_query_ms: float
     num_queries: int
+    by_type: dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -56,6 +57,7 @@ class AblationResult:
             "mrr": round(self.mrr, 4),
             "avg_query_ms": round(self.avg_query_ms, 2),
             "num_queries": self.num_queries,
+            "by_type": self.by_type,
         }
 
 
@@ -92,7 +94,19 @@ class AblationBench:
         rr_sum = 0.0
         query_times: list[float] = []
 
+        # Per query-type tracking (for WikiQAPair)
+        type_hits: dict[str, dict[int, int]] = {}
+        type_rr: dict[str, float] = {}
+        type_n: dict[str, int] = {}
+
         for qa in qa_pairs:
+            qtype = getattr(qa, "query_type", "term")
+            if qtype not in type_hits:
+                type_hits[qtype] = {k: 0 for k in self._k_values}
+                type_rr[qtype] = 0.0
+                type_n[qtype] = 0
+            type_n[qtype] += 1
+
             t0 = time.perf_counter()
             chunks = self._retrieve(engine, qa.query, active, limit)
             if do_rerank and chunks:
@@ -106,14 +120,25 @@ class AblationBench:
             for k in self._k_values:
                 if expected in retrieved_docs[:k]:
                     hits_at[k] += 1
+                    type_hits[qtype][k] += 1
 
             for rank, doc in enumerate(retrieved_docs, 1):
                 if doc == expected:
                     rr_sum += 1.0 / rank
+                    type_rr[qtype] += 1.0 / rank
                     break
 
         n = len(qa_pairs)
         avg_ms = sum(query_times) / len(query_times) if query_times else 0.0
+
+        by_type = {
+            qt: {
+                "recall@5": round(type_hits[qt].get(5, 0) / type_n[qt], 3) if type_n[qt] else 0,
+                "mrr":      round(type_rr[qt] / type_n[qt], 3) if type_n[qt] else 0,
+                "n":        type_n[qt],
+            }
+            for qt in type_hits
+        }
 
         return AblationResult(
             config=config_name,
@@ -124,6 +149,7 @@ class AblationBench:
             mrr=rr_sum / n if n else 0.0,
             avg_query_ms=avg_ms,
             num_queries=n,
+            by_type=by_type,
         )
 
     @staticmethod

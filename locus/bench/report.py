@@ -79,7 +79,15 @@ class BenchReport:
             dr5  = last.recall_at_5  - base.recall_at_5
             dmrr = last.mrr          - base.mrr
             rows.append(sep)
-            rows.append(f"{'Δ vs bm25_only':<22} {dr1:>+6.3f} {'':>6} {dr5:>+6.3f} {dmrr:>+6.3f}")
+            rows.append(f"{'delta vs bm25_only':<22} {dr1:>+6.3f} {'':>6} {dr5:>+6.3f} {dmrr:>+6.3f}")
+
+        # Per-type breakdown (only for last config if types present)
+        last = self.ablation[-1] if self.ablation else None
+        if last and last.by_type:
+            rows.append("")
+            rows.append(f"  R@5 by query type ({last.config}):")
+            for qtype, metrics in sorted(last.by_type.items()):
+                rows.append(f"    {qtype:<12} R@5={metrics['recall@5']:.3f}  MRR={metrics['mrr']:.3f}  n={metrics['n']}")
         return "\n".join(rows)
 
     def _baseline_table(self) -> str:

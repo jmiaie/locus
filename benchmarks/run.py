@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from locus.core import LocusEngine, __version__
 from locus.bench.synthetic import SyntheticCorpus
+from locus.bench.wiki import EngineeringWiki
 from locus.bench.ablation import AblationBench
 from locus.bench.latency import LatencyBench
 from locus.bench.baseline import BaselineBench, RANK_BM25_AVAILABLE
@@ -30,11 +31,13 @@ from locus.bench.report import BenchReport
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Locus benchmark suite")
-    parser.add_argument("--docs",         type=int, default=100,  help="Corpus size for ablation + baseline")
+    parser.add_argument("--docs",         type=int, default=100,  help="Corpus size (simple synthetic only)")
     parser.add_argument("--seed",         type=int, default=42,   help="RNG seed for reproducibility")
     parser.add_argument("--fast",         action="store_true",     help="Smaller corpus + latency scales")
     parser.add_argument("--no-latency",   action="store_true",     help="Skip latency benchmarks")
     parser.add_argument("--latency-only", action="store_true",     help="Run only latency benchmarks")
+    parser.add_argument("--simple",       action="store_true",     help="Use simple SyntheticCorpus instead of EngineeringWiki")
+    parser.add_argument("--ompa",         default=None,            help="Path to an OMPA vault root to benchmark against")
     parser.add_argument("--out",          default=None,            help="Output JSON file path")
     args = parser.parse_args()
 
@@ -47,9 +50,12 @@ def main() -> None:
     results_dir = Path(__file__).parent / "results"
     results_dir.mkdir(exist_ok=True)
 
+    corpus_mode = "ompa" if args.ompa else ("simple" if args.simple else "wiki")
     print(f"\nLocus v{__version__} — Benchmark Suite")
     print(f"{'=' * 50}")
-    print(f"Corpus size   : {args.docs} docs")
+    print(f"Corpus mode   : {corpus_mode}")
+    if corpus_mode == "simple":
+        print(f"Corpus size   : {args.docs} docs")
     print(f"Seed          : {args.seed}")
     print(f"rank_bm25     : {'available' if RANK_BM25_AVAILABLE else 'not installed (pip install rank_bm25)'}")
     print()
@@ -63,18 +69,35 @@ def main() -> None:
     # Ablation + Baseline
     # ----------------------------------------------------------------
     if not args.latency_only:
-        print(f"Generating {args.docs}-doc synthetic corpus...")
-        corpus = SyntheticCorpus(num_docs=args.docs, seed=args.seed)
         store_tmp = tempfile.mkdtemp(prefix="locus_bench_main_")
+        corpus = None
+
+        if args.ompa:
+            print(f"Using OMPA vault: {args.ompa}")
+            doc_dir = Path(args.ompa)
+            corpus = None  # no cleanup needed
+        elif args.simple:
+            print(f"Generating {args.docs}-doc simple corpus...")
+            corpus = SyntheticCorpus(num_docs=args.docs, seed=args.seed)
+        else:
+            print("Generating engineering wiki corpus (interconnected, typed QA)...")
+            corpus = EngineeringWiki(seed=args.seed)
 
         try:
-            doc_dir = corpus.generate()
+            if corpus is not None:
+                doc_dir = corpus.generate()
             engine  = LocusEngine(store_path=store_tmp)
 
             print("Indexing corpus...")
             engine.index(str(doc_dir))
 
-            qa_pairs = corpus.qa_pairs
+            if args.ompa:
+                # For OMPA vault: generate QA from indexed docs
+                from locus.bench.synthetic import QAPair
+                docs = engine.corpus.list_docs()
+                qa_pairs = [QAPair(f"about {Path(d).stem.replace('_',' ')}", d, "term") for d in docs[:50]]
+            else:
+                qa_pairs = corpus.qa_pairs
             num_queries = len(qa_pairs)
             print(f"QA pairs generated : {num_queries}")
             print()
@@ -99,7 +122,8 @@ def main() -> None:
                     print(f"  {r.system:<22} {r.notes}")
 
         finally:
-            corpus.cleanup()
+            if corpus is not None:
+                corpus.cleanup()
             import shutil
             shutil.rmtree(store_tmp, ignore_errors=True)
 

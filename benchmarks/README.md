@@ -24,7 +24,56 @@ Results are saved to `benchmarks/results/latest.json` and a timestamped file.
 
 ---
 
-## Results (v1.0.0, 100-doc synthetic corpus, seed=42)
+## Results (v1.0.0)
+
+### Engineering Wiki Corpus (interconnected, typed QA — recommended)
+
+The `EngineeringWiki` corpus mimics a real knowledge base: 10 domains
+(auth, deployment, monitoring, security…), each with overview / runbook /
+recent-changes documents, proper wikilinks between related documents,
+named entities (Alice, Bob…) referenced across docs, and YAML frontmatter
+with date/type/tags. QA pairs are typed: term, entity, navigate, temporal, type.
+
+```
+python benchmarks/run.py --no-latency        # default: engineering wiki
+```
+
+#### Signal Ablation
+
+| Config | R@1 | R@3 | R@5 | MRR | ms/q |
+|---|---|---|---|---|---|
+| bm25_only | 0.336 | 0.850 | 0.982 | 0.569 | 11 |
+| bm25_kg | 0.248 | 0.841 | 0.956 | 0.513 | 14 |
+| bm25_kg_links | 0.239 | 0.690 | 0.947 | 0.474 | 23 |
+| bm25_kg_links_sf | 0.265 | 0.735 | 0.912 | 0.490 | 55 |
+| full_6signal | **0.451** | 0.779 | 0.947 | **0.633** | 61 |
+| full_reranked | 0.372 | 0.770 | 0.947 | 0.562 | 71 |
+
+#### R@5 by Query Type (full_6signal)
+
+| Type | R@5 | MRR | n | Signal advantage |
+|---|---|---|---|---|
+| entity | 1.000 | 0.318 | 33 | KG expansion |
+| navigate | 1.000 | 1.000 | 20 | Link-walk |
+| temporal | 0.750 | 0.589 | 20 | Recency + structural |
+| term | 0.967 | 0.594 | 30 | BM25 baseline |
+| type | 1.000 | 0.342 | 10 | Structural |
+
+#### Baseline Comparison
+
+| System | R@5 | MRR | ms/q |
+|---|---|---|---|
+| locus_6signal | 0.947 | **0.633** | 106 |
+| rank_bm25 | 1.000 | 0.760 | 0.1 |
+| grep_literal | 1.000 | 0.729 | 0.1 |
+
+---
+
+### Simple Synthetic Corpus (100 docs, seed=42)
+
+```
+python benchmarks/run.py --simple --docs 100
+```
 
 ### Signal Ablation
 
