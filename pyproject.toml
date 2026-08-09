@@ -46,6 +46,7 @@ locus = "locus.mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["locus"]
+include = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
