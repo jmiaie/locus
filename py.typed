@@ -1,0 +1,2 @@
+# This file marks the package as typed (PEP 561)
+# It signals to type checkers that this package provides inline type hints
