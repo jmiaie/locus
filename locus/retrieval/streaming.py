@@ -70,11 +70,11 @@ class StreamingRetriever:
             return True
         return self.time_remaining_ms() > self.config.signal_timeout_ms
     
-    def record_signal(self, signal_name: str, elapsed_ms: float) -> None:
+    def record_signal(self, signal_name: str, results: list[ScoredChunk], elapsed_ms: float) -> None:
         """Record completion time for a signal."""
         self._elapsed_by_signal[signal_name] = elapsed_ms
         if self.config.on_signal_complete:
-            self.config.on_signal_complete(signal_name, [], elapsed_ms)
+            self.config.on_signal_complete(signal_name, results, elapsed_ms)
     
     def track_result(self, chunk: ScoredChunk, signal_name: str) -> None:
         """Track when a result is yielded."""
@@ -128,17 +128,18 @@ def stream_with_timeout(
         best_chunk: ScoredChunk | None = None
         best_signal: str | None = None
         best_score: float = -1.0
+        best_is_new: bool = False
         
         for signal_name, chunks in signals.items():
             if indices[signal_name] < len(chunks):
                 chunk = chunks[indices[signal_name]]
                 # Prefer chunks we haven't seen; break ties by score
                 is_new = chunk.chunk_id not in seen_chunk_ids
-                score = (is_new, chunk.score)
-                if score > (best_signal is not None, best_score):
+                if (is_new, chunk.score) > (best_is_new, best_score):
                     best_chunk = chunk
                     best_signal = signal_name
                     best_score = chunk.score
+                    best_is_new = is_new
         
         if best_chunk and best_signal:
             indices[best_signal] += 1

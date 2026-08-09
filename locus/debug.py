@@ -8,7 +8,7 @@ and ranking decisions. Useful for diagnosing retrieval quality issues.
 import logging
 import json
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +27,7 @@ class SignalTrace:
     start_time: str
     end_time: str
     elapsed_ms: float
-    limit: int
+    retrieval_limit: int
     results_count: int
     top_results: list[dict[str, Any]]
 
@@ -83,6 +83,7 @@ class DebugTracer:
         signal_name: str,
         results: list[ScoredChunk],
         elapsed_ms: float,
+        limit: int = 0,
     ) -> None:
         """Record a signal's results."""
         if not self.enabled or trace.tracer is None:
@@ -102,9 +103,9 @@ class DebugTracer:
             signal_name=signal_name,
             query=trace.query,
             start_time=trace.start_time,
-            end_time=datetime.utcnow().isoformat(),
+            end_time=datetime.now(timezone.utc).isoformat(),
             elapsed_ms=elapsed_ms,
-            limit=len(results),
+            retrieval_limit=limit,
             results_count=len(results),
             top_results=top_3,
         )
@@ -116,7 +117,7 @@ class DebugTracer:
         final_results: list[ScoredChunk],
         total_elapsed_ms: float,
         cache_hit: bool = False,
-    ) -> QueryTrace:
+    ) -> "QueryTrace | None":
         """Finalize and store a query trace."""
         if not self.enabled or trace.tracer is None:
             return None
@@ -135,7 +136,7 @@ class DebugTracer:
         query_trace = QueryTrace(
             query=trace.query,
             intent=trace.intent,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             total_elapsed_ms=total_elapsed_ms,
             cache_hit=cache_hit,
             signals=trace.signals,
@@ -177,11 +178,13 @@ class DebugTracer:
             "p50_latency_ms": round(sorted(latencies)[len(latencies) // 2], 2),
             "p95_latency_ms": round(sorted(latencies)[int(len(latencies) * 0.95)], 2),
             "signal_usage": signal_counts,
-            "log_dir": str(self.log_dir),
+            "log_dir": str(self.log_dir) if self.enabled else None,
         }
     
     def clear(self) -> None:
         """Clear all traces and log files."""
+        if not self.enabled:
+            return
         self.traces.clear()
         for f in self.log_dir.glob("*.json"):
             f.unlink()
@@ -194,7 +197,7 @@ class QueryTraceContext:
         self.tracer = tracer
         self.query = query
         self.intent = intent
-        self.start_time = datetime.utcnow().isoformat()
+        self.start_time = datetime.now(timezone.utc).isoformat()
         self.signals: list[SignalTrace] = []
     
     def __enter__(self):
