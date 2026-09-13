@@ -162,18 +162,36 @@ def _dispatch(request: dict, engine: LocusEngine) -> dict:
         }
 
 
+# Loopback-only binds that are safe without a token.
+# NOTE: "" is deliberately NOT here. In Python's socket API bind(("", port)) resolves
+# to 0.0.0.0 -- i.e. ALL interfaces -- so allowing it would open the permissive path
+# the guard below exists to close.
+_LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
 def serve(
     engine: LocusEngine,
-    host: str = "0.0.0.0",
+    host: str = "127.0.0.1",
     port: int = 7391,
     token: str | None = None,
 ) -> None:
-    """Start the HTTP server (blocking)."""
+    """Start the HTTP server (blocking).
+
+    Binding a non-loopback address without a token is refused: this endpoint exposes
+    every Locus tool to anyone who can reach the port, so a permissive bind must be a
+    deliberate pairing with auth rather than a default nobody chose.
+    """
+    if host not in _LOOPBACK and not token:
+        raise SystemExit(
+            f"refusing to bind {host!r} without --token: this endpoint exposes all "
+            f"Locus tools to any host that can reach port {port}. "
+            f"Pass --token <secret>, or bind 127.0.0.1 for local-only access."
+        )
     handler = _build_handler(engine, token=token)
     server = HTTPServer((host, port), handler)
     logger.info("Locus HTTP server at http://%s:%d", host, port)
-    if token:
-        logger.info("Auth enabled — Bearer token required")
+    logger.info("Auth enabled — Bearer token required" if token
+                else "Auth DISABLED — local-only bind; do not expose this port")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -185,7 +203,11 @@ def serve(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Locus HTTP server")
     parser.add_argument("--store", default=".locus")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address. Non-loopback REQUIRES --token (see serve()).",
+    )
     parser.add_argument("--port", type=int, default=7391)
     parser.add_argument("--token", default=None, help="Optional Bearer token")
     args = parser.parse_args()
