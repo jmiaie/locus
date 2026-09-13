@@ -6,8 +6,8 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.6.0-blue)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-167%20passing-brightgreen?logo=pytest&logoColor=white)](tests/)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-263%20passing-brightgreen?logo=pytest&logoColor=white)](tests/)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)](pyproject.toml)
 [![MCP Compatible](https://img.shields.io/badge/MCP-compatible-blueviolet)](https://modelcontextprotocol.io)
 [![26 MCP Tools](https://img.shields.io/badge/MCP%20tools-26-blueviolet)](#mcp-tools)
@@ -84,6 +84,11 @@ Locus fuses six independent signals via **Reciprocal Rank Fusion**. Query intent
 ```bash
 pip install locus-rag
 ```
+
+> **The distribution is `locus-rag`, not `locus`.** `pip install locus` pulls an
+> unrelated spatial-index library by a different author — it installs cleanly and
+> imports successfully, so the mistake looks like success. If `import locus` does not
+> give you this project, you have the wrong package.
 
 **Index and retrieve in three commands:**
 
