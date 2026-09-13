@@ -74,28 +74,50 @@ class OMPABridge:
             return 0
 
         count = 0
+        skipped = 0
         try:
             with sqlite3.connect(str(kg_db)) as conn:
+                # The source column is `source_file` in current OMPA (>=1.0); older
+                # releases used `source`. Resolve it from the schema rather than
+                # assuming, because guessing wrong fails the WHOLE query and the
+                # bridge then reports success with zero triples imported.
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(triples)")}
+                src_col = ("source_file" if "source_file" in cols
+                           else "source" if "source" in cols else "NULL")
+                if not {"subject", "predicate", "object"} <= cols:
+                    logger.warning("OMPA KG at %s has an unrecognised triples "
+                                   "schema (columns: %s) — skipping import",
+                                   kg_db, sorted(cols))
+                    return 0
                 rows = conn.execute(
-                    "SELECT subject, predicate, object, valid_from, valid_to, source "
-                    "FROM triples"
+                    f"SELECT subject, predicate, object, "
+                    f"valid_from, valid_to, {src_col} FROM triples"
                 ).fetchall()
         except Exception as e:
             logger.warning("Could not read OMPA KG: %s", e)
             return 0
 
         for subject, predicate, obj, valid_from, valid_to, source in rows:
-            if subject and predicate and obj:
-                try:
-                    self.engine.kg.add_triple(
-                        subject, predicate, obj,
-                        valid_from=valid_from,
-                        valid_to=valid_to,
-                        source=source,
-                    )
-                    count += 1
-                except Exception:
-                    pass
+            if not (subject and predicate and obj):
+                continue
+            try:
+                self.engine.kg.add_triple(
+                    subject, predicate, obj,
+                    valid_from=valid_from,
+                    valid_to=valid_to,
+                    source=source,
+                )
+                count += 1
+            except Exception as e:
+                # Do not swallow: a triple that fails to import is a real loss, and
+                # silently discarding it made the original bug invisible.
+                skipped += 1
+                if skipped <= 3:
+                    logger.warning("OMPA bridge: could not import triple "
+                                   "%r %r %r: %s", subject, predicate, obj, e)
+
+        if skipped:
+            logger.warning("OMPA bridge: %d triple(s) could not be imported", skipped)
 
         logger.info("OMPA bridge: imported %d KG triples", count)
         return count
