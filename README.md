@@ -18,11 +18,12 @@
 Every result tells you *exactly* why it was returned.
 
 [Quick Start](#quick-start) &nbsp;·&nbsp;
+[MCP Demo](#mcp-sales-demo) &nbsp;·&nbsp;
 [Architecture](#architecture) &nbsp;·&nbsp;
 [MCP Tools](#mcp-tools) &nbsp;·&nbsp;
-[CLI Reference](#cli-reference) &nbsp;·&nbsp;
-[Cluster](#multi-node-cluster) &nbsp;·&nbsp;
-[OMPA Bridge](#ompa-bridge)
+[Benchmark Results](#benchmark-results) &nbsp;·&nbsp;
+[Companion Stack](#companion-stack) &nbsp;·&nbsp;
+[CLI Reference](#cli-reference)
 
 </div>
 
@@ -135,6 +136,18 @@ claude mcp add locus -- py -3 -m locus.mcp.server --store /path/to/.locus
 ```
 
 Then ask Claude: *"What does the codebase say about the auth system?"* — Locus retrieves context, Claude answers.
+
+### MCP sales demo
+
+Run a deck-ready end-to-end walkthrough (sample notes → MCP `locus_index` / `locus_retrieve` / `locus_explain` / KG / doctor) with **zero extra deps**:
+
+```bash
+pip install -e .          # or: pip install locus-rag
+python examples/mcp_sales_demo.py
+python examples/mcp_sales_demo.py --keep   # leave the temp store for inspection
+```
+
+The script calls the same `locus.mcp.server` tool dispatcher an MCP client would hit — useful for consulting demos without wiring Claude Desktop first. See [`examples/mcp_sales_demo.py`](examples/mcp_sales_demo.py).
 
 ---
 
@@ -328,6 +341,18 @@ Each result is tagged `node_name:signal` so you always know which knowledge base
 
 ---
 
+## Companion stack
+
+Locus is the **explainable retrieval** layer. Pair it with OMPA (memory) and CognitionOS (compliance product):
+
+| Layer | Project | Role |
+|---|---|---|
+| Explainable retrieval | **Locus** ([`locus-rag`](https://pypi.org/project/locus-rag/)) | Vectorless RAG — BM25 + temporal KG + link walking, zero GPU, MCP-native |
+| Vault memory | **[OMPA](https://github.com/jmiaie/ompa)** ([PyPI](https://pypi.org/project/ompa/)) | Vault · palace · temporal KG · agent lifecycle hooks |
+| Compliance product | **[CognitionOS](https://github.com/jmiaie/cognition-os)** | Audit · RBAC · retention · PHI redaction on top of Locus + OMPA |
+
+CognitionOS consumes Locus via git submodule / optional pip; keep the public `locus` API stable when changing this package.
+
 ## OMPA Bridge
 
 If you already use [OMPA](https://github.com/jmiaie/ompa) as your agent memory layer, Locus can import your vault directly. The KG schemas are identical — no transformation required.
@@ -367,6 +392,36 @@ Result: 5 pass  1 warn  0 fail
 ```
 
 ---
+
+## Benchmark Results
+
+Published numbers from the **Engineering Wiki** corpus (interconnected docs with entities, wikilinks, frontmatter). Full methodology and the weaker synthetic baseline live in [`benchmarks/README.md`](benchmarks/README.md). Re-run with:
+
+```bash
+python benchmarks/run.py --no-latency        # engineering wiki (default)
+pip install rank_bm25                        # optional naive BM25 baseline
+python benchmarks/run.py
+```
+
+### Signal ablation (Engineering Wiki)
+
+| Config | R@1 | R@3 | R@5 | MRR | ms/q |
+|---|---|---|---|---|---|
+| bm25_only | 0.336 | 0.850 | 0.982 | 0.569 | 11 |
+| bm25_kg | 0.248 | 0.841 | 0.956 | 0.513 | 14 |
+| full_6signal | **0.451** | 0.779 | 0.947 | **0.633** | 61 |
+
+Full six-signal fusion lifts R@1 and MRR vs BM25-only on an interconnected corpus. On the templated *synthetic* corpus (worst case for graph signals), BM25-only matches the full pipeline — see benchmarks README for honest interpretation.
+
+### Baseline comparison (Engineering Wiki)
+
+| System | R@5 | MRR | ms/q |
+|---|---|---|---|
+| locus_6signal | 0.947 | **0.633** | 106 |
+| rank_bm25 (naive BM25) | 1.000 | 0.760 | 0.1 |
+| grep_literal | 1.000 | 0.729 | 0.1 |
+
+> **Note:** `rank_bm25` / `grep` win raw keyword recall on this typed-term-heavy wiki; Locus trades a few points of pure keyword MRR for **provenance, temporal KG, link expansion, and zero infra**. A tiny embedding / vector baseline is **not yet published** here — run `benchmarks/run.py` and open an issue/PR with numbers if you add one.
 
 ## Benchmarking
 
@@ -455,4 +510,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgements
 
-Locus is architecturally descended from [OMPA](https://github.com/jmiaie/ompa) (Obsidian-MemPalace-Agnostic), which pioneered the three-layer vault → palace → KG design for agent memory. The tiered bulletin board, temporal KG schema, and session lifecycle patterns are direct adaptations. The OMPA bridge enables seamless import of existing OMPA vaults.
+Locus is architecturally descended from [OMPA](https://github.com/jmiaie/ompa) (Obsidian-MemPalace-Agnostic), which pioneered the three-layer vault → palace → KG design for agent memory. The tiered bulletin board, temporal KG schema, and session lifecycle patterns are direct adaptations. The OMPA bridge enables seamless import of existing OMPA vaults. [CognitionOS](https://github.com/jmiaie/cognition-os) productizes Locus + OMPA into a compliance SaaS (audit, RBAC, retention) — see [Companion stack](#companion-stack).
