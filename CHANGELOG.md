@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **`examples/mcp_sales_demo.py`** — end-to-end MCP sales/consulting demo: sample notes → `locus_index` / `locus_retrieve` / `locus_explain` / KG / doctor via the same tool dispatcher MCP clients use (stdlib + locus only)
+- **README Companion stack** — honest roles for Locus (retrieval), OMPA (vault memory), CognitionOS (compliance product)
+- **README Benchmark Results** — published Engineering Wiki ablation + baseline numbers (from `benchmarks/README.md`); documents how to re-run; notes that a tiny vector baseline is not yet published
+
+### Deferred
+- Streaming retrieval polish (`StreamingRetriever` exists but is not wired as `LocusEngine.stream_retrieve`) — Phase-1 follow-up, not in this PR
+
+---
 ## [1.0.0] — 2026-05-08
 
 ### Added
