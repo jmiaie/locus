@@ -15,7 +15,9 @@ All six are fused via weighted Reciprocal Rank Fusion.
 """
 
 import logging
+import time
 from pathlib import Path
+from typing import Iterator
 
 from .memory.corpus import Corpus, _EXCLUDE
 from .memory.knowledge_graph import TemporalKG
@@ -30,6 +32,7 @@ from .retrieval.reranker import LocusReranker, RerankerWeights
 from .context.packer import ContextPacker, PackedContext
 from .retrieval.fusion import rrf_fuse
 from .retrieval.classifier import classify_query, INTENT_WEIGHTS, QueryIntent
+from .retrieval.streaming import StreamingConfig, StreamingRetriever
 from .context.bulletin import ContextBulletin
 from .context.budget import ContextBudget
 from .hooks import LocusHooks
@@ -231,6 +234,82 @@ class LocusEngine:
 
         self._fire("post_retrieve", query=query, result_count=len(fused))
         return fused
+
+    def stream_retrieve(
+        self,
+        query: str,
+        limit: int = 5,
+        as_of: str = None,
+        use_links: bool = True,
+        config: StreamingConfig | None = None,
+    ) -> Iterator[ScoredChunk]:
+        """Yield chunks as each retrieval signal finishes.
+
+        Same six signals as :meth:`retrieve` (BM25, KG, link walk, structural,
+        recency, link popularity), run one at a time. Each new ``chunk_id`` is
+        yielded when its signal returns, until ``limit`` unique chunks have
+        been produced.
+
+        This is not RRF fusion. Order and membership can differ from
+        ``retrieve()``. :class:`StreamingRetriever` adaptive dropout can skip
+        signals that would start after the time budget is inside
+        ``signal_timeout_ms``. Bulletin hits and the token budget are recorded
+        for chunks actually yielded. Results are not stored in the retrieve cache.
+        """
+        retriever = StreamingRetriever(config)
+        retriever._start_time = time.perf_counter()
+        seen: set[str] = set()
+        yielded = 0
+        total_tokens = 0
+        bm25_hits: list[ScoredChunk] = []
+
+        def _signals():
+            yield "bm25", lambda: self._bm25.search(query, limit=limit * 2)
+            yield "kg", lambda: self._kg_ret.search(query, limit=limit * 2, as_of=as_of)
+            if use_links:
+                yield "link", lambda: (
+                    self._walker.walk(bm25_hits[:3], depth=2, limit=limit) if bm25_hits else []
+                )
+            yield "structural", lambda: self._structural.search(query, limit=limit * 2)
+            yield "recency", lambda: self._recency.search(limit=limit * 2)
+            yield "link_pop", lambda: self._link_pop.search(limit=limit * 2)
+
+        try:
+            self._fire("pre_retrieve", query=query, limit=limit, stream=True)
+            for name, run in _signals():
+                if yielded >= limit:
+                    break
+                if not retriever.should_run_signal(name):
+                    break
+                started = time.perf_counter()
+                hits = run() or []
+                elapsed_ms = (time.perf_counter() - started) * 1000
+                retriever.record_signal(name, hits, elapsed_ms)
+                if name == "bm25":
+                    bm25_hits = list(hits)
+                for chunk in hits:
+                    if yielded >= limit:
+                        break
+                    if chunk.chunk_id in seen:
+                        continue
+                    seen.add(chunk.chunk_id)
+                    retriever.track_result(chunk, name)
+                    self.bulletin.record_hit(
+                        chunk.chunk_id,
+                        content=chunk.content,
+                        doc_path=chunk.doc_path,
+                        base_score=chunk.score,
+                        provenance=chunk.provenance,
+                    )
+                    total_tokens += self.budget.estimate_tokens(chunk.content)
+                    yielded += 1
+                    yield chunk
+        finally:
+            if total_tokens:
+                check = self.budget.record(total_tokens)
+                if check.status.value in ("critical", "warning", "trend"):
+                    logger.warning("Budget [stream]: %s", check.message)
+            self._fire("post_retrieve", query=query, result_count=yielded, stream=True)
 
     # ------------------------------------------------------------------
     # Reranking, context packing & confidence

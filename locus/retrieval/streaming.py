@@ -45,7 +45,7 @@ class StreamingRetriever:
     Example:
         >>> engine = LocusEngine()
         >>> for chunk in engine.stream_retrieve("auth", limit=5):
-        ...     print(chunk)  # Updates progressively
+        ...     print(chunk)  # yielded as each signal finishes (not RRF order)
     """
     
     def __init__(self, config: StreamingConfig | None = None):
