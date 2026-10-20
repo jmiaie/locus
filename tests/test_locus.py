@@ -3178,6 +3178,50 @@ def test_http_server_no_wildcard_cors_and_token_enforced(tmp_path):
         server.server_close()
 
 
+def test_http_server_blocks_dns_rebinding_and_foreign_origin(tmp_path):
+    from locus.mcp.http_server import make_server
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+    js = {"Content-Type": "application/json"}
+    server = make_server(engine, host="127.0.0.1", port=0)
+    try:
+        # attacker hostname re-resolved to 127.0.0.1 (DNS rebinding): same-origin, no preflight
+        status, _, _ = _http_request(server, "POST", "/rpc", body, {**js, "Host": "evil.example:7391"})
+        assert status == 403
+        status, _, _ = _http_request(server, "GET", "/tools", None, {"Host": "evil.example"})
+        assert status == 403
+        # foreign browser Origin is refused even with a loopback Host
+        status, _, _ = _http_request(server, "POST", "/rpc", body, {**js, "Origin": "http://evil.example"})
+        assert status == 403
+        # loopback Host / Origin variants still work
+        for extra in ({}, {"Host": "localhost:7391"}, {"Host": "[::1]:7391"},
+                      {"Origin": "http://localhost:3000"}, {"Origin": "http://127.0.0.1:7391"}):
+            status, _, data = _http_request(server, "POST", "/rpc", body, {**js, **extra})
+            assert status == 200, extra
+            assert json.loads(data)["result"] == {}
+    finally:
+        server.server_close()
+
+    server = make_server(engine, host="127.0.0.1", port=0, cors_origin="https://app.example")
+    try:
+        status, _, _ = _http_request(server, "POST", "/rpc", body, {**js, "Origin": "https://app.example"})
+        assert status == 200
+        status, _, _ = _http_request(server, "POST", "/rpc", body, {**js, "Origin": "https://other.example"})
+        assert status == 403
+    finally:
+        server.server_close()
+
+    # token mode: any Host is fine (remote clients), auth still enforced
+    server = make_server(engine, host="127.0.0.1", port=0, token="s3cret")
+    try:
+        status, _, _ = _http_request(server, "POST", "/rpc", body, {**js, "Host": "locus.internal", "Authorization": "Bearer s3cret"})
+        assert status == 200
+        status, _, _ = _http_request(server, "POST", "/rpc", body, {**js, "Host": "locus.internal"})
+        assert status == 401
+    finally:
+        server.server_close()
+
+
 def _make_snapshot(tmp_path):
     engine = LocusEngine(store_path=tmp_path / ".locus")
     (tmp_path / "doc.md").write_text("# Doc\n\nContent.")

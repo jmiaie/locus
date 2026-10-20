@@ -14,6 +14,8 @@ Security defaults:
   - binds 127.0.0.1 unless --host says otherwise
   - a bearer token (--token) is required for any non-loopback bind
   - no CORS headers unless --cors-origin names an allowed origin
+  - without a token, only loopback Host headers are served (DNS-rebinding guard);
+    a browser Origin must be loopback or the --cors-origin value
 
 Zero external dependencies — uses stdlib http.server only.
 
@@ -52,6 +54,22 @@ def is_loopback(host: str) -> bool:
         return False
 
 
+def _strip_port(hostport: str) -> str:
+    hostport = hostport.strip().lower()
+    if hostport.startswith("["):  # [::1]:7391
+        return hostport[1:].split("]", 1)[0]
+    if hostport.count(":") == 1:
+        return hostport.rsplit(":", 1)[0]
+    return hostport
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    scheme, sep, rest = origin.partition("://")
+    if not sep or scheme not in ("http", "https"):
+        return False
+    return is_loopback(_strip_port(rest.split("/", 1)[0]))
+
+
 def _build_handler(
     engine: LocusEngine,
     token: str | None = None,
@@ -73,6 +91,25 @@ def _build_handler(
                 return True
             auth = self.headers.get("Authorization", "")
             return hmac.compare_digest(auth.encode(), f"Bearer {self._token}".encode())
+
+        def _request_allowed(self) -> bool:
+            """Block DNS-rebinding and cross-site requests.
+
+            Without a token the server only trusts loopback ``Host`` headers, so a
+            page on an attacker-controlled hostname that re-resolves to 127.0.0.1
+            cannot reach the tools.  A browser ``Origin`` header, when present, must
+            be the configured CORS origin or a loopback origin.
+            """
+            if not self._token:
+                host = self.headers.get("Host", "")
+                if not host or not is_loopback(_strip_port(host)):
+                    return False
+            origin = self.headers.get("Origin")
+            if origin is not None:
+                if self._cors_origin and origin == self._cors_origin:
+                    return True
+                return _is_loopback_origin(origin)
+            return True
 
         def _send_cors(self) -> None:
             if self._cors_origin:
@@ -104,6 +141,9 @@ def _build_handler(
             if self.path == "/health":
                 self._send_json({"ok": True, "version": __version__})
             elif self.path == "/tools":
+                if not self._request_allowed():
+                    self._send_json({"error": "Forbidden host or origin"}, 403)
+                    return
                 if not self._authorized():
                     self._send_json({"error": "Unauthorized"}, 401)
                     return
@@ -118,6 +158,9 @@ def _build_handler(
                 self._send_json({"error": "Not found"}, 404)
 
         def do_POST(self) -> None:
+            if not self._request_allowed():
+                self._send_json({"error": "Forbidden host or origin"}, 403)
+                return
             if not self._authorized():
                 self._send_json({"error": "Unauthorized"}, 401)
                 return

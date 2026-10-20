@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Security
 - **HTTP server binds `127.0.0.1` by default** (was `0.0.0.0`). Binding any non-loopback host now requires `--token`; `serve()` / `make_server()` raise `ValueError` otherwise. Token comparison is constant-time. `/tools` now requires the token when one is set.
+- **DNS-rebinding guard.** Without a token, the HTTP server only serves requests whose `Host` header is loopback, and any browser `Origin` must be loopback or the `--cors-origin` value (403 otherwise). This stops a page on an attacker hostname that re-resolves to 127.0.0.1 from calling tools such as `locus_index` / `locus_export_kg`.
 - **No wildcard CORS.** CORS headers are only sent for an explicit `--cors-origin`; `*` is rejected. `POST /rpc` requires `Content-Type: application/json`.
 - **Safe snapshot restore.** Extraction uses `tarfile` `filter="data"` where available; archives with absolute, `..`, symlink, hardlink or device members are rejected. `overwrite=True` only wipes an empty directory or an existing Locus store, never the filesystem root or home directory. The `locus_restore` MCP tool only restores to a relative path inside the server's working directory.
 
