@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.jmiaie/locus -->
 <div align="center">
 
 # Locus
@@ -6,11 +7,11 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.6.0-blue)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-167%20passing-brightgreen?logo=pytest&logoColor=white)](tests/)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-280%20passing-brightgreen?logo=pytest&logoColor=white)](tests/)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)](pyproject.toml)
 [![MCP Compatible](https://img.shields.io/badge/MCP-compatible-blueviolet)](https://modelcontextprotocol.io)
-[![26 MCP Tools](https://img.shields.io/badge/MCP%20tools-26-blueviolet)](#mcp-tools)
+[![47 MCP Tools](https://img.shields.io/badge/MCP%20tools-47-blueviolet)](#mcp-tools)
 [![CI](https://github.com/jmiaie/locus/actions/workflows/ci.yml/badge.svg)](https://github.com/jmiaie/locus/actions)
 
 **Retrieval-Augmented Generation without vectors, without GPUs, without black boxes.**
@@ -83,7 +84,7 @@ Locus fuses six independent signals via **Reciprocal Rank Fusion**. Query intent
 ## Quick Start
 
 ```bash
-pip install locus-rag
+pip install locus-rag     # macOS / Linux: python3 -m pip install locus-rag · Windows: py -3 -m pip install locus-rag
 ```
 
 **Index and retrieve in three commands:**
@@ -132,8 +133,17 @@ print(engine.explain(chunks[0].chunk_id, query="JWT")["narrative"])
 **As an MCP server** (Claude Desktop / Claude Code / Cursor / Windsurf):
 
 ```bash
-claude mcp add locus -- py -3 -m locus.mcp.server --store /path/to/.locus
+# macOS / Linux
+claude mcp add locus -- python3 -m locus.mcp.server --store /path/to/.locus
+
+# Windows (Python launcher)
+claude mcp add locus -- py -3 -m locus.mcp.server --store C:\path\to\.locus
+
+# Any OS, via the installed console script
+claude mcp add locus -- locus mcp --store /path/to/.locus
 ```
+
+Tool calls use the `--store` you configured; a call can still target another store by passing `store_path`.
 
 Then ask Claude: *"What does the codebase say about the auth system?"* — Locus retrieves context, Claude answers.
 
@@ -160,9 +170,9 @@ Locus is three layers — memory, retrieval, and interface — with no layer dep
 │  Interface Layer                                                  │
 │  ┌────────────────┐  ┌──────────────────┐  ┌─────────────────┐  │
 │  │  CLI (locus)   │  │  MCP stdio server│  │  HTTP JSON-RPC  │  │
-│  │  26 commands   │  │  26 tools        │  │  POST /rpc      │  │
+│  │  41 commands   │  │  47 tools        │  │  POST /rpc      │  │
 │  │                │  │  4 prompts       │  │  Bearer token   │  │
-│  │                │  │  resources       │  │  CORS headers   │  │
+│  │                │  │  resources       │  │  CORS opt-in    │  │
 │  └────────────────┘  └──────────────────┘  └─────────────────┘  │
 ├─────────────────────────────────────────────────────────────────┤
 │  Retrieval Layer                                                  │
@@ -216,10 +226,10 @@ engine.explain(chunk_id, query="authentication")
 This is structurally impossible with vector search. No cosine score has a "why."
 
 ### MCP Integration
-- **26 tools** spanning retrieval, KG operations, bulletin management, cluster, evaluation, export
+- **47 tools** spanning retrieval, KG operations, reasoning, bulletin management, cluster, evaluation, export, snapshots, annotations and relevance feedback
 - **MCP Resources** — all indexed documents browsable as `locus://doc/{path}`
 - **4 MCP Prompts** — live-context templates pre-filled with retrieved knowledge before sending to the model
-- **HTTP transport** — `locus serve --port 7391 --token <secret>` for remote clients
+- **HTTP transport** — `locus serve` binds `127.0.0.1` by default; any other host requires `--token <secret>`. No CORS headers unless you pass `--cors-origin <origin>`
 
 ### Memory Management
 - **Tiered bulletin board** (Tier 0 Pinned / Tier 1 Hot / Tier 2 Archive) with hit-boost + age-decay scoring
@@ -230,7 +240,7 @@ This is structurally impossible with vector search. No cosine score has a "why."
 ### Operations
 - **Health diagnostics** — `locus doctor` checks corpus, KG, bulletin, store size, version
 - **Multi-node cluster** — cross-corpus RRF fusion with node-prefixed provenance (`jarv:bm25`)
-- **OMPA bridge** — direct import from OMPA vaults (identical SQLite KG schema)
+- **OMPA bridge** — imports OMPA vaults (markdown + KG triples; OMPA's `source_file` maps to Locus `source`)
 - **Evaluation** — `locus benchmark qa.json` measures Recall@K and MRR
 
 ---
@@ -238,7 +248,7 @@ This is structurally impossible with vector search. No cosine score has a "why."
 ## MCP Tools
 
 <details>
-<summary><strong>All 26 tools</strong></summary>
+<summary><strong>All 47 tools</strong></summary>
 
 | Tool | Description |
 |:---|:---|
@@ -268,6 +278,27 @@ This is structurally impossible with vector search. No cosine score has a "why."
 | `locus_add_node` | Register a named node in the cluster |
 | `locus_remove_node` | Unregister a node |
 | `locus_list_nodes` | List nodes with corpus and KG stats |
+| `locus_prepare_context` | Retrieve, re-rank and pack results into a token budget |
+| `locus_cache_stats` | Query cache size, hit rate, hits, misses |
+| `locus_clear_cache` | Invalidate the query result cache |
+| `locus_reason` | Multi-hop KG reasoning over the entities in a question |
+| `locus_find_paths` | Shortest KG paths between two entities |
+| `locus_inspect` | A document's chunks, top terms, entities and links |
+| `locus_top_terms` | Corpus-wide top terms by document frequency |
+| `locus_ingest_github` | Fetch and index markdown from a GitHub repository |
+| `locus_expand_query` | Expand a query via KG aliases and first-hop neighbours |
+| `locus_multi_retrieve` | Run several query variants and fuse with RRF |
+| `locus_timeline` | Chronological KG facts for an entity |
+| `locus_snapshot` | Archive the store to a `.tar.gz` |
+| `locus_restore` | Restore a store from a snapshot (MCP: relative target inside the working dir) |
+| `locus_snapshot_info` | List a snapshot's files and sizes |
+| `locus_related_docs` | Similar documents by TF-IDF cosine (no embeddings) |
+| `locus_diff` | Preview new / changed / deleted files before re-indexing |
+| `locus_annotate` | Attach a label and note to a chunk |
+| `locus_get_annotations` | Labels and notes on a chunk |
+| `locus_chunks_with_label` | Chunk IDs carrying a label |
+| `locus_mark_relevant` | Persist a relevance boost for a chunk and query |
+| `locus_mark_irrelevant` | Persist a relevance penalty for a chunk and query |
 
 </details>
 
@@ -308,7 +339,7 @@ locus [--store PATH] COMMAND [args]
 | `sync <path>` | Full reindex |
 | `watch <path>` | Auto-reindex on changes; `--interval 5` |
 | `mcp` | Start MCP stdio server |
-| `serve` | Start HTTP JSON-RPC server; `--port 7391 --token` |
+| `serve` | Start HTTP JSON-RPC server; `--host 127.0.0.1 --port 7391 --token --cors-origin` |
 | `ingest-ompa <vault>` | Import OMPA vault |
 | `benchmark <qa.json>` | Recall@K + MRR; `--k 1,3,5` |
 | `doctor` | Health check report |
@@ -355,7 +386,7 @@ CognitionOS consumes Locus via git submodule / optional pip; keep the public `lo
 
 ## OMPA Bridge
 
-If you already use [OMPA](https://github.com/jmiaie/ompa) as your agent memory layer, Locus can import your vault directly. The KG schemas are identical — no transformation required.
+If you already use [OMPA](https://github.com/jmiaie/ompa) as your agent memory layer, Locus can import your vault directly. OMPA's `triples` table (`source_file` column) is mapped onto the Locus KG (`source`). If the table is missing required columns the import raises `OMPASchemaError` rather than silently importing nothing.
 
 ```bash
 locus ingest-ompa ~/path/to/ompa-vault --store .locus
@@ -365,10 +396,10 @@ locus ingest-ompa ~/path/to/ompa-vault --store .locus
 from locus.bridge.ompa import OMPABridge
 bridge = OMPABridge(engine, vault_path="~/ompa-vault")
 result = bridge.ingest()
-# {"chunks_indexed": 847, "triples_imported": 3_241, ...}
+# {"vault": "...", "chunks_indexed": ..., "triples_imported": ..., "kg_source": ".../.palace/knowledge_graph.sqlite3"}
 ```
 
-Markdown files are indexed via the normal pipeline. KG triples from `.palace/knowledge_graph.sqlite3` are copied row-by-row. Safe to re-run — checksum dedup prevents duplicate indexing.
+Markdown files are indexed via the normal pipeline. KG triples from `.palace/knowledge_graph.sqlite3` are copied row by row after a schema check. Safe to re-run — checksum dedup prevents duplicate indexing.
 
 ---
 
@@ -386,7 +417,7 @@ Locus Doctor
 [WARN]  bulletin             Tier 0 (pinned) is full — oldest entries will be demoted
 [PASS]  entity_resolver      14 aliases registered
 [PASS]  store_size           3.21 MB at .locus
-[PASS]  version              Locus v0.6.0
+[PASS]  version              Locus v1.0.0
 
 Result: 5 pass  1 warn  0 fail
 ```
@@ -473,8 +504,10 @@ dot -Tpng knowledge.dot -o knowledge.png
 ## Installation
 
 ```bash
-pip install locus-rag
+pip install locus-rag          # macOS / Linux: python3 -m pip install locus-rag · Windows: py -3 -m pip install locus-rag
 ```
+
+Locus is also described for the MCP registry in [`server.json`](server.json) (`uvx locus-rag mcp --store PATH`).
 
 **Zero runtime dependencies.** Locus uses only Python stdlib: `sqlite3`, `re`, `pathlib`, `threading`, `http.server`, `hashlib`, `math`, `json`.
 
@@ -483,6 +516,7 @@ Optional extras:
 ```bash
 pip install "locus-rag[ompa]"   # OMPA vault bridge
 pip install "locus-rag[dev]"    # pytest, coverage
+pip install "locus-rag[bench]"  # rank_bm25 baseline for benchmarks
 ```
 
 **Requirements:** Python 3.11+

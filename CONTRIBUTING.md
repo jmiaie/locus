@@ -11,7 +11,7 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-All 167 tests should pass. Run the suite before submitting a PR.
+All tests should pass (280 at the time of writing). Run the suite before submitting a PR.
 
 ## Project Structure
 

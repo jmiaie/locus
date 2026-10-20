@@ -174,3 +174,16 @@ free-text retrieval.
 - **Environment**: Windows 11, Python 3.14, NVMe SSD, no GPU.
 - **Reproducibility**: Fixed seed (42). Run `python benchmarks/run.py` to
   reproduce.
+
+---
+
+## Public datasets (BEIR) — harness only, no published results yet
+
+`locus/bench/beir.py` scores Locus and `rank_bm25` on a BEIR-format dataset that is
+already on disk (it never downloads). See [docs/ROADMAP.md](../docs/ROADMAP.md) items N1 to N4
+and the benchmark plan in [docs/PRD.md](../docs/PRD.md#9-benchmark-plan).
+
+```bash
+pip install -e ".[bench]"
+python -m locus.bench.beir /data/beir/scifact --split test --out benchmarks/results/beir-scifact.json
+```

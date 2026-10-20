@@ -80,6 +80,7 @@ class LocusSnapshot:
         snapshot_path: str | Path,
         store_path: str | Path,
         overwrite: bool = False,
+        root: str | Path | None = None,
     ) -> dict:
         """Extract a snapshot archive to *store_path*.
 
@@ -88,7 +89,11 @@ class LocusSnapshot:
         snapshot_path:  Path to the ``.tar.gz`` archive.
         store_path:     Destination store directory.  Must not already exist
                         unless *overwrite* is ``True``.
-        overwrite:      If ``True``, wipe *store_path* before extraction.
+        overwrite:      If ``True``, wipe *store_path* before extraction.  Only
+                        an empty directory or an existing Locus store is wiped.
+        root:           If given, *store_path* must be a relative path that
+                        resolves strictly inside *root* (used by the MCP tool,
+                        where the caller is a model, not the operator).
 
         Returns
         -------
@@ -97,36 +102,40 @@ class LocusSnapshot:
         import shutil
 
         snapshot_path = Path(snapshot_path)
-        store_path = Path(store_path)
+        target = _resolve_target(store_path, root)
+        if isinstance(target, dict):
+            return target
 
         if not snapshot_path.exists():
             return {"error": f"Snapshot not found: {snapshot_path}"}
 
-        if store_path.exists():
+        if target.exists():
             if not overwrite:
                 return {"error": f"store_path already exists (use overwrite=True): {store_path}"}
-            shutil.rmtree(store_path)
+            if not target.is_dir() or target.is_symlink():
+                return {"error": f"store_path is not a directory: {store_path}"}
+            if any(target.iterdir()) and not _looks_like_store(target):
+                return {"error": f"Refusing to overwrite a directory that is not a Locus store: {store_path}"}
+            shutil.rmtree(target)
 
-        store_path.parent.mkdir(parents=True, exist_ok=True)
-
-        store_path.mkdir(parents=True, exist_ok=True)
+        target.mkdir(parents=True, exist_ok=True)
 
         files_restored = 0
         with tarfile.open(str(snapshot_path), "r:gz") as tar:
-            # Security: strip absolute paths and prevent path traversal
             members = []
             for m in tar.getmembers():
-                m.name = Path(m.name).as_posix().lstrip("/")
-                if ".." in m.name:
-                    continue
+                if not _safe_member(m, target):
+                    return {"error": f"Unsafe archive member rejected: {m.name!r}"}
                 members.append(m)
                 if m.isfile():
                     files_restored += 1
-            # Extract directly into store_path — arcnames are relative to store root
-            tar.extractall(str(store_path), members=members)
+            if hasattr(tarfile, "data_filter"):
+                tar.extractall(str(target), members=members, filter="data")
+            else:  # Python without PEP 706 filters; members were vetted above
+                tar.extractall(str(target), members=members)
 
         return {
-            "store_path": str(store_path),
+            "store_path": str(target),
             "files_restored": files_restored,
         }
 
@@ -156,3 +165,38 @@ class LocusSnapshot:
             "file_count": len(files),
             "files": files,
         }
+
+
+_STORE_MARKERS = ("kg.sqlite3", "corpus", "bulletin.sqlite3", "resolver.sqlite3")
+
+
+def _looks_like_store(path: Path) -> bool:
+    return any((path / name).exists() for name in _STORE_MARKERS)
+
+
+def _resolve_target(store_path: str | Path, root: str | Path | None) -> Path | dict:
+    raw = Path(store_path)
+    if ".." in raw.parts:
+        return {"error": f"store_path must not contain '..': {store_path}"}
+    if root is None:
+        target = raw.resolve()
+        if target == Path(target.anchor) or target == Path.home().resolve():
+            return {"error": f"Refusing to restore into {target}"}
+        return target
+    if raw.is_absolute():
+        return {"error": f"store_path must be relative: {store_path}"}
+    root_resolved = Path(root).resolve()
+    target = (root_resolved / raw).resolve()
+    if target == root_resolved or root_resolved not in target.parents:
+        return {"error": f"store_path escapes the store root: {store_path}"}
+    return target
+
+
+def _safe_member(member: tarfile.TarInfo, target: Path) -> bool:
+    name = Path(member.name)
+    if name.is_absolute() or ".." in name.parts or member.name.startswith(("/", "\\")):
+        return False
+    if not (member.isfile() or member.isdir()):
+        return False  # no symlinks, hardlinks or device files in a store snapshot
+    dest = (target / name).resolve()
+    return dest == target or target in dest.parents

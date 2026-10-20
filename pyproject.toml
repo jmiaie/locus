@@ -40,9 +40,10 @@ bench = ["rank_bm25>=0.2.2"]
 
 [project.scripts]
 locus = "locus.__main__:main"
+locus-rag = "locus.__main__:main"
 
 [project.entry-points."mcp.servers"]
-locus = "locus.mcp.server:main"
+locus = "locus.mcp.server:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["locus"]

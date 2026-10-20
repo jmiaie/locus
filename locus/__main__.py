@@ -68,12 +68,13 @@ def main() -> None:
     # MCP servers
     # ----------------------------------------------------------------
     p_mcp = sub.add_parser("mcp", help="Start the MCP stdio server")
-    p_mcp.add_argument("--store", default=".locus", dest="mcp_store")
+    p_mcp.add_argument("--store", default=None, dest="mcp_store")
 
     p_serve = sub.add_parser("serve", help="Start the HTTP JSON-RPC server")
-    p_serve.add_argument("--host",  default="0.0.0.0")
+    p_serve.add_argument("--host",  default="127.0.0.1")
     p_serve.add_argument("--port",  type=int, default=7391)
-    p_serve.add_argument("--token", default=None, help="Optional Bearer token")
+    p_serve.add_argument("--token", default=None, help="Bearer token (required for non-loopback hosts)")
+    p_serve.add_argument("--cors-origin", default=None, help="Allowed browser origin (CORS off by default)")
 
     # ----------------------------------------------------------------
     # Watch
@@ -215,7 +216,7 @@ def main() -> None:
     # ----------------------------------------------------------------
     if args.cmd == "mcp":
         from .mcp.server import main as mcp_main
-        mcp_main(store_path=getattr(args, "mcp_store", ".locus"))
+        mcp_main(store_path=args.mcp_store or args.store)
         return
 
     if args.cmd == "serve":
@@ -223,12 +224,17 @@ def main() -> None:
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
         from .core import LocusEngine
         from .mcp.http_server import serve
-        serve(
-            LocusEngine(store_path=args.store),
-            host=args.host,
-            port=args.port,
-            token=args.token,
-        )
+        try:
+            serve(
+                LocusEngine(store_path=args.store),
+                host=args.host,
+                port=args.port,
+                token=args.token,
+                cors_origin=args.cors_origin,
+            )
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(2)
         return
 
     if args.cmd is None:
