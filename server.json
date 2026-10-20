@@ -1,0 +1,39 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.jmiaie/locus",
+  "title": "Locus",
+  "description": "Vectorless RAG over markdown: BM25, temporal knowledge graph and link walking, with provenance.",
+  "repository": {
+    "url": "https://github.com/jmiaie/locus",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/jmiaie/locus",
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "locus-rag",
+      "version": "1.0.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "description": "Start the MCP stdio server"
+        },
+        {
+          "type": "named",
+          "name": "--store",
+          "description": "Locus store directory. Tool calls use it unless they pass store_path.",
+          "default": ".locus",
+          "isRequired": false,
+          "format": "filepath"
+        }
+      ]
+    }
+  ]
+}

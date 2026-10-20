@@ -3,6 +3,7 @@ Tests for Locus vectorless RAG engine.
 """
 
 import json
+import math
 import pytest
 from pathlib import Path
 
@@ -3025,3 +3026,379 @@ def test_engine_mark_relevant_irrelevant(tmp_path):
 def test_version_is_1_0_0():
     from locus.core import __version__
     assert __version__ == "1.0.0"
+
+
+# -----------------------------------------------------------------------
+# Bundle hardening — MCP store selection, HTTP defaults, restore, OMPA
+# -----------------------------------------------------------------------
+
+def _run_stdio_server(monkeypatch, store, requests):
+    import io
+    import locus.mcp.server as srv
+    lines = "".join(json.dumps(r) + "\n" for r in requests)
+    out = io.StringIO()
+    monkeypatch.setattr(srv.sys, "stdin", io.StringIO(lines))
+    monkeypatch.setattr(srv.sys, "stdout", out)
+    monkeypatch.setattr(srv, "_engines", {})
+    monkeypatch.setattr(srv, "_default_store", ".locus")
+    srv.main(store_path=str(store))
+    return [json.loads(line) for line in out.getvalue().splitlines() if line.strip()]
+
+
+def _tool_payload(resp):
+    return json.loads(resp["result"]["content"][0]["text"])
+
+
+def test_mcp_stdio_tool_calls_use_configured_store(tmp_path, monkeypatch):
+    store = tmp_path / "configured"
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text("# A\n\nZebra migration notes.")
+    monkeypatch.chdir(tmp_path)
+    responses = _run_stdio_server(monkeypatch, store, [
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+         "params": {"name": "locus_index", "arguments": {"path": str(docs)}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "locus_status", "arguments": {}}},
+    ])
+    assert len(responses) == 2
+    assert LocusEngine(store_path=store).corpus.doc_count() == 1
+    assert not (tmp_path / ".locus").exists()
+
+
+def test_mcp_call_tool_store_path_argument_overrides(tmp_path, monkeypatch):
+    import locus.mcp.server as srv
+    monkeypatch.setattr(srv, "_engines", {})
+    default = LocusEngine(store_path=tmp_path / "default")
+    other = tmp_path / "other"
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text("# A\n\nContent.")
+    srv._call_tool("locus_index", {"path": str(docs), "store_path": str(other)}, engine=default)
+    assert default.corpus.doc_count() == 0
+    assert LocusEngine(store_path=other).corpus.doc_count() == 1
+    assert "error" in srv._call_tool("locus_status", {"store_path": "a/../../b"}, engine=default)
+
+
+def test_http_dispatch_uses_engine_passed_to_serve(tmp_path, monkeypatch):
+    import locus.mcp.server as srv
+    from locus.mcp.http_server import _dispatch
+    monkeypatch.setattr(srv, "_engines", {})
+    monkeypatch.chdir(tmp_path)
+    engine = LocusEngine(store_path=tmp_path / "served")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text("# A\n\nContent.")
+    _dispatch({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": "locus_index", "arguments": {"path": str(docs)}}}, engine)
+    assert engine.corpus.doc_count() == 1
+    assert not (tmp_path / ".locus").exists()
+
+
+def test_mcp_stdio_ping_and_unknown_method(tmp_path, monkeypatch):
+    responses = _run_stdio_server(monkeypatch, tmp_path / "s", [
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "bogus/method"},
+    ])
+    assert responses[0] == {"jsonrpc": "2.0", "id": 1, "result": {}}
+    assert len(responses) == 2
+    assert responses[1]["id"] == 2
+    assert responses[1]["error"]["code"] == -32601
+
+
+def test_http_dispatch_ping(tmp_path):
+    from locus.mcp.http_server import _dispatch
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    resp = _dispatch({"jsonrpc": "2.0", "id": 9, "method": "ping"}, engine)
+    assert resp == {"jsonrpc": "2.0", "id": 9, "result": {}}
+
+
+def test_http_server_defaults_to_loopback():
+    import inspect
+    from locus.mcp import http_server
+    assert inspect.signature(http_server.serve).parameters["host"].default == "127.0.0.1"
+    assert http_server.is_loopback("127.0.0.1")
+    assert http_server.is_loopback("::1")
+    assert http_server.is_loopback("localhost")
+    assert not http_server.is_loopback("0.0.0.0")
+    assert not http_server.is_loopback("")
+
+
+def test_http_server_requires_token_for_non_loopback(tmp_path):
+    from locus.mcp.http_server import make_server
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    with pytest.raises(ValueError):
+        make_server(engine, host="0.0.0.0", port=0)
+    with pytest.raises(ValueError):
+        make_server(engine, host="127.0.0.1", port=0, cors_origin="*")
+    server = make_server(engine, host="0.0.0.0", port=0, token="s3cret")
+    server.server_close()
+
+
+def _http_request(server, method, path, body=None, headers=None):
+    import http.client
+    import threading
+    t = threading.Thread(target=server.handle_request, daemon=True)
+    t.start()
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    conn.request(method, path, body=body, headers=headers or {})
+    resp = conn.getresponse()
+    data = resp.read()
+    hdrs = dict(resp.getheaders())
+    conn.close()
+    t.join(5)
+    return resp.status, hdrs, data
+
+
+def test_http_server_no_wildcard_cors_and_token_enforced(tmp_path):
+    from locus.mcp.http_server import make_server
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+    server = make_server(engine, host="127.0.0.1", port=0, token="s3cret")
+    try:
+        status, hdrs, _ = _http_request(server, "POST", "/rpc", body, {"Content-Type": "application/json"})
+        assert status == 401
+        assert "Access-Control-Allow-Origin" not in hdrs
+        status, hdrs, data = _http_request(server, "POST", "/rpc", body, {
+            "Content-Type": "application/json", "Authorization": "Bearer s3cret"})
+        assert status == 200 and json.loads(data)["result"] == {}
+        assert "Access-Control-Allow-Origin" not in hdrs
+        status, _, _ = _http_request(server, "POST", "/rpc", body, {
+            "Content-Type": "text/plain", "Authorization": "Bearer s3cret"})
+        assert status == 415
+    finally:
+        server.server_close()
+
+    server = make_server(engine, host="127.0.0.1", port=0, cors_origin="http://localhost:3000")
+    try:
+        _, hdrs, _ = _http_request(server, "GET", "/health")
+        assert hdrs.get("Access-Control-Allow-Origin") == "http://localhost:3000"
+    finally:
+        server.server_close()
+
+
+def _make_snapshot(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    (tmp_path / "doc.md").write_text("# Doc\n\nContent.")
+    engine.index(tmp_path / "doc.md")
+    snap = tmp_path / "snap.tar.gz"
+    engine.snapshot(str(snap))
+    return snap
+
+
+def test_snapshot_restore_rejects_traversal_members(tmp_path):
+    import io
+    import tarfile
+    from locus.snapshot import LocusSnapshot
+    evil = tmp_path / "evil.tar.gz"
+    with tarfile.open(evil, "w:gz") as tar:
+        for name in ("../escape.txt", "/abs.txt"):
+            info = tarfile.TarInfo(name)
+            info.size = 3
+            tar.addfile(info, io.BytesIO(b"bad"))
+    result = LocusSnapshot.load(evil, store_path=tmp_path / "target")
+    assert "error" in result
+    assert not (tmp_path / "escape.txt").exists()
+
+    link = tmp_path / "link.tar.gz"
+    with tarfile.open(link, "w:gz") as tar:
+        info = tarfile.TarInfo("kg.sqlite3")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "/etc/passwd"
+        tar.addfile(info)
+    assert "error" in LocusSnapshot.load(link, store_path=tmp_path / "target2")
+
+
+def test_snapshot_restore_with_root_rejects_absolute_and_escape(tmp_path):
+    from locus.snapshot import LocusSnapshot
+    snap = _make_snapshot(tmp_path)
+    root = tmp_path / "root"
+    root.mkdir()
+    assert "error" in LocusSnapshot.load(snap, store_path=str(tmp_path / "abs"), root=root)
+    assert "error" in LocusSnapshot.load(snap, store_path="../outside", root=root)
+    assert "error" in LocusSnapshot.load(snap, store_path=".", root=root)
+    ok = LocusSnapshot.load(snap, store_path="restored", root=root)
+    assert "error" not in ok and (root / "restored").is_dir()
+
+
+def test_snapshot_overwrite_refuses_non_store_directory(tmp_path):
+    from locus.snapshot import LocusSnapshot
+    snap = _make_snapshot(tmp_path)
+    precious = tmp_path / "precious"
+    precious.mkdir()
+    (precious / "thesis.txt").write_text("do not delete")
+    result = LocusSnapshot.load(snap, store_path=precious, overwrite=True)
+    assert "error" in result
+    assert (precious / "thesis.txt").exists()
+    # A real store can be overwritten
+    store = tmp_path / "store"
+    LocusSnapshot.load(snap, store_path=store)
+    assert "error" not in LocusSnapshot.load(snap, store_path=store, overwrite=True)
+
+
+def test_mcp_restore_tool_confined_to_cwd(tmp_path, monkeypatch):
+    import locus.mcp.server as srv
+    snap = _make_snapshot(tmp_path)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    monkeypatch.setattr(srv, "_engines", {})
+    bad = srv._call_tool("locus_restore", {"snapshot_path": str(snap), "store_path": str(tmp_path / "x")})
+    assert "error" in bad
+    good = srv._call_tool("locus_restore", {"snapshot_path": str(snap), "store_path": "restored"})
+    assert "error" not in good and (work / "restored").is_dir()
+
+
+def _ompa_vault_with_real_schema(tmp_path):
+    import sqlite3
+    ddl = (Path(__file__).parent / "fixtures" / "ompa_kg_schema.sql").read_text()
+    vault = tmp_path / "vault"
+    (vault / ".palace").mkdir(parents=True)
+    (vault / "note.md").write_text("# Note\n\nAlice works at Acme.")
+    conn = sqlite3.connect(str(vault / ".palace" / "knowledge_graph.sqlite3"))
+    conn.executescript(ddl)
+    conn.execute(
+        "INSERT INTO triples (id, subject, predicate, object, valid_from, source_file) "
+        "VALUES (?,?,?,?,?,?)",
+        ("t1", "Alice", "works_at", "Acme", "2024-01-01", "people/alice.md"),
+    )
+    conn.commit()
+    conn.close()
+    return vault
+
+
+def test_ompa_bridge_imports_real_ompa_schema(tmp_path):
+    from locus.bridge.ompa import OMPABridge
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    vault = _ompa_vault_with_real_schema(tmp_path)
+    result = OMPABridge(engine, vault_path=vault).ingest()
+    assert result["triples_imported"] == 1
+    triples = [t for t in engine.kg.query_entity("Alice") if t.predicate == "works_at"]
+    assert triples and triples[0].object == "Acme"
+    assert triples[0].source == "people/alice.md"
+
+
+def test_ompa_bridge_schema_mismatch_fails_loudly(tmp_path):
+    import sqlite3
+    from locus.bridge.ompa import OMPABridge, OMPASchemaError
+    import locus.mcp.server as srv
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    vault = tmp_path / "vault"
+    (vault / ".palace").mkdir(parents=True)
+    conn = sqlite3.connect(str(vault / ".palace" / "knowledge_graph.sqlite3"))
+    conn.execute("CREATE TABLE triples (id TEXT, subj TEXT, pred TEXT, obj TEXT)")
+    conn.commit()
+    conn.close()
+    with pytest.raises(OMPASchemaError):
+        OMPABridge(engine, vault_path=vault).ingest()
+    resp = srv._call_tool("locus_ingest_ompa", {"vault_path": str(vault)}, engine=engine)
+    assert resp["error"].startswith("OMPASchemaError")
+
+
+# -----------------------------------------------------------------------
+# BEIR harness (ROADMAP N1/N2) — tiny on-disk fixture, no downloads
+# -----------------------------------------------------------------------
+
+def _write_beir(root):
+    root.mkdir()
+    (root / "qrels").mkdir()
+    corpus = [
+        {"_id": "d1", "title": "Zebra migration", "text": "Zebras migrate across the Serengeti every year."},
+        {"_id": "d2", "title": "Penguin diet", "text": "Penguins eat krill and small fish."},
+        {"_id": "d3/odd id", "title": "Volcano", "text": "Basalt lava flows from shield volcanoes."},
+    ]
+    (root / "corpus.jsonl").write_text("\n".join(json.dumps(d) for d in corpus))
+    queries = [
+        {"_id": "q1", "text": "zebra migration serengeti"},
+        {"_id": "q2", "text": "basalt lava volcano"},
+        {"_id": "q3", "text": "query without judgments"},
+    ]
+    (root / "queries.jsonl").write_text("\n".join(json.dumps(q) for q in queries))
+    (root / "qrels" / "test.tsv").write_text(
+        "query-id\tcorpus-id\tscore\nq1\td1\t1\nq2\td3/odd id\t1\n"
+    )
+
+
+def test_beir_loader_and_metrics(tmp_path):
+    from locus.bench.beir import load_beir, ndcg_at_k, score_run
+    _write_beir(tmp_path / "ds")
+    ds = load_beir(tmp_path / "ds")
+    assert set(ds.queries) == {"q1", "q2"}
+    assert ds.qrels["q2"] == {"d3/odd id": 1}
+    assert ndcg_at_k(["d1"], {"d1": 1}) == 1.0
+    assert ndcg_at_k(["x", "d1"], {"d1": 1}) == pytest.approx(1 / math.log2(3))
+    perfect = score_run("oracle", ds, lambda q: ["d1"] if "zebra" in q else ["d3/odd id"])
+    assert perfect.ndcg_at_10 == 1.0 and perfect.mrr == 1.0
+
+
+def test_beir_run_locus_and_rank_bm25(tmp_path):
+    from locus.bench.beir import load_beir, run_locus, run_rank_bm25
+    _write_beir(tmp_path / "ds")
+    ds = load_beir(tmp_path / "ds")
+    result = run_locus(ds, tmp_path / "work")
+    assert result.num_queries == 2
+    assert result.recall[10] == 1.0
+    pytest.importorskip("rank_bm25")
+    assert run_rank_bm25(ds).recall[10] == 1.0
+
+
+def test_beir_embedding_baseline_is_an_honest_stub(tmp_path):
+    from locus.bench.beir import BeirDataset, run_embedding_baseline
+    with pytest.raises(NotImplementedError, match="ROADMAP"):
+        run_embedding_baseline(BeirDataset({}, {}, {}))
+
+
+# -----------------------------------------------------------------------
+# Docs stay honest — counts in README / server.json match the code
+# -----------------------------------------------------------------------
+
+_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_readme_tool_count_matches_registry():
+    import re
+    from locus.mcp.tools import TOOLS
+    readme = (_ROOT / "README.md").read_text(encoding="utf-8")
+    counts = {int(n) for n in re.findall(r"(?<![%\w])(\d+)\s*(?:MCP\s+)?tools\b", readme, re.I)}
+    counts |= {int(n) for n in re.findall(r"MCP%20tools-(\d+)", readme)}
+    assert counts == {len(TOOLS)}
+    section = readme.split("## MCP Tools", 1)[1].split("### MCP Prompts", 1)[0]
+    table_tools = set(re.findall(r"^\| `(locus_\w+)` \|", section, re.M))
+    assert table_tools == set(TOOLS)
+
+
+def test_readme_version_matches_code():
+    from locus.core import __version__
+    readme = (_ROOT / "README.md").read_text(encoding="utf-8")
+    assert f"version-{__version__}-blue" in readme
+    assert "0.6.0" not in readme
+
+
+def test_server_json_matches_package():
+    import tomllib
+    from locus.core import __version__
+    manifest = json.loads((_ROOT / "server.json").read_text(encoding="utf-8"))
+    pyproject = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert manifest["version"] == __version__ == pyproject["project"]["version"]
+    pkg = manifest["packages"][0]
+    assert pkg["registryType"] == "pypi"
+    assert pkg["identifier"] == pyproject["project"]["name"]
+    assert pkg["version"] == __version__
+    assert pkg["transport"] == {"type": "stdio"}
+    readme = (_ROOT / "README.md").read_text(encoding="utf-8")
+    assert f"mcp-name: {manifest['name']}" in readme
+
+
+def test_ompa_bridge_rejects_unknown_kg_version(tmp_path):
+    import sqlite3
+    from locus.bridge.ompa import OMPABridge, OMPASchemaError
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    vault = _ompa_vault_with_real_schema(tmp_path)
+    conn = sqlite3.connect(str(vault / ".palace" / "knowledge_graph.sqlite3"))
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+    with pytest.raises(OMPASchemaError, match="version 2"):
+        OMPABridge(engine, vault_path=vault).ingest()
+    assert engine.corpus.doc_count() == 0

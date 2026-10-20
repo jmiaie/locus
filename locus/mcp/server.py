@@ -3,20 +3,24 @@ Locus MCP Server — Vectorless RAG as Model Context Protocol tools.
 JSON-RPC over stdin/stdout. Compatible with Claude Desktop, Cursor, Windsurf.
 
 Capabilities:
-  tools     — 20 RAG + KG + cluster tools
+  tools     — every tool in locus.mcp.tools.TOOLS (RAG, KG, cluster, snapshot, feedback)
   resources — indexed documents browsable as locus://doc/{path}
   prompts   — 4 pre-built prompt templates with live context injection
 
 Usage:
-    claude mcp add locus -- py -3 -m locus.mcp.server --store /path/to/.locus
+    claude mcp add locus -- python3 -m locus.mcp.server --store /path/to/.locus   # macOS / Linux
+    claude mcp add locus -- py -3 -m locus.mcp.server --store C:\\path\\to\\.locus  # Windows
     locus mcp --store /path/to/.locus
+
+Tool calls use the store given by --store unless the call passes its own
+``store_path`` argument.
 """
 
 import argparse
 import json
 import logging
 import sys
-
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..core import LocusEngine, __version__
@@ -32,9 +36,13 @@ logger = logging.getLogger(__name__)
 _engines: dict[str, LocusEngine] = {}
 # Per-registry cluster cache
 _clusters: dict[str, "LocusCluster"] = {}
+# Store configured by --store (or main(store_path=...)); used when a call omits store_path
+_default_store: str = ".locus"
 
 
-def _get_engine(store_path: str = ".locus") -> LocusEngine:
+def _get_engine(store_path: str | None = None) -> LocusEngine:
+    if store_path is None:
+        store_path = _default_store
     if store_path not in _engines:
         _engines[store_path] = LocusEngine(store_path=store_path)
     return _engines[store_path]
@@ -60,7 +68,27 @@ def _list_tools() -> dict:
     }
 
 
-def _call_tool(name: str, arguments: dict) -> dict:
+def _has_traversal(path: str) -> bool:
+    return ".." in Path(path).parts
+
+
+def _resolve_engine(arguments: dict, engine: LocusEngine | None) -> LocusEngine | dict:
+    """Pick the engine for a tool call.
+
+    An explicit ``store_path`` argument wins; otherwise the engine the
+    transport was started with (``engine``), else the --store default.
+    """
+    if "store_path" in arguments and arguments["store_path"] is not None:
+        store_path = str(arguments["store_path"])
+        if _has_traversal(store_path):
+            return {"error": "Invalid store_path"}
+        return _get_engine(store_path)
+    if engine is not None:
+        return engine
+    return _get_engine(_default_store)
+
+
+def _call_tool(name: str, arguments: dict, engine: LocusEngine | None = None) -> dict:
     if name not in TOOLS:
         return {"error": f"Unknown tool: {name}"}
 
@@ -69,10 +97,14 @@ def _call_tool(name: str, arguments: dict) -> dict:
         if name in ("locus_cluster_retrieve", "locus_add_node", "locus_remove_node", "locus_list_nodes"):
             return _handle_cluster_tool(name, arguments)
 
-        store_path = str(arguments.get("store_path", ".locus"))
-        if ".." in store_path:
-            return {"error": "Invalid store_path"}
-        engine = _get_engine(store_path)
+        # locus_restore's store_path is the restore *target*, not the store to query
+        if name == "locus_restore":
+            return _restore(arguments)
+
+        resolved = _resolve_engine(arguments, engine)
+        if isinstance(resolved, dict):
+            return resolved
+        engine = resolved
 
         if name == "locus_index":
             return engine.index(arguments["path"], pattern=arguments.get("pattern", "**/*.md"))
@@ -199,9 +231,12 @@ def _call_tool(name: str, arguments: dict) -> dict:
             )
 
         if name == "locus_ingest_ompa":
-            from ..bridge.ompa import OMPABridge
+            from ..bridge.ompa import OMPABridge, OMPASchemaError
             bridge = OMPABridge(engine, vault_path=arguments["vault_path"])
-            return bridge.ingest(pattern=arguments.get("pattern", "**/*.md"))
+            try:
+                return bridge.ingest(pattern=arguments.get("pattern", "**/*.md"))
+            except OMPASchemaError as e:
+                return {"error": f"OMPASchemaError: {e}"}
 
         if name == "locus_benchmark":
             from ..eval import LocusEval
@@ -282,14 +317,6 @@ def _call_tool(name: str, arguments: dict) -> dict:
         if name == "locus_snapshot":
             return engine.snapshot(arguments["output_path"])
 
-        if name == "locus_restore":
-            from ..snapshot import LocusSnapshot
-            return LocusSnapshot.load(
-                snapshot_path=arguments["snapshot_path"],
-                store_path=arguments.get("store_path", ".locus-restored"),
-                overwrite=bool(arguments.get("overwrite", False)),
-            )
-
         if name == "locus_snapshot_info":
             from ..snapshot import LocusSnapshot
             return LocusSnapshot.inspect(arguments["snapshot_path"])
@@ -339,9 +366,20 @@ def _call_tool(name: str, arguments: dict) -> dict:
         return {"error": type(e).__name__}
 
 
+def _restore(arguments: dict) -> dict:
+    from ..snapshot import LocusSnapshot
+    # Restores requested over MCP must land inside the server's working directory.
+    return LocusSnapshot.load(
+        snapshot_path=arguments["snapshot_path"],
+        store_path=arguments.get("store_path", ".locus-restored"),
+        overwrite=bool(arguments.get("overwrite", False)),
+        root=Path.cwd(),
+    )
+
+
 def _handle_cluster_tool(name: str, arguments: dict) -> dict:
     cluster_path = arguments.get("cluster_path", "")
-    if not cluster_path or ".." in cluster_path:
+    if not cluster_path or _has_traversal(cluster_path):
         return {"error": "Invalid cluster_path"}
     cluster = _get_cluster(cluster_path)
 
@@ -419,9 +457,15 @@ def _send(response: dict) -> None:
     sys.stdout.flush()
 
 
+def _error(req_id, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+
+
 def main(store_path: str = ".locus") -> None:
-    # Pre-warm the default engine
-    _engines[store_path] = LocusEngine(store_path=store_path)
+    global _default_store
+    store_path = str(store_path)
+    _default_store = store_path
+    default_engine = _get_engine(store_path)
 
     request: dict | None = None
     while True:
@@ -458,6 +502,7 @@ def main(store_path: str = ".locus") -> None:
                 result = _call_tool(
                     name=params["name"],
                     arguments=params.get("arguments", {}),
+                    engine=default_engine,
                 )
                 _send({
                     "jsonrpc": "2.0",
@@ -469,13 +514,17 @@ def main(store_path: str = ".locus") -> None:
 
             # Resources
             elif method == "resources/list":
-                sp = params.get("store_path", store_path)
-                engine = _get_engine(sp)
+                engine = _resolve_engine(params, default_engine)
+                if isinstance(engine, dict):
+                    _send(_error(req_id, -32602, engine["error"]))
+                    continue
                 _send({"jsonrpc": "2.0", "id": req_id, "result": _handle_resources_list(engine)})
 
             elif method == "resources/read":
-                sp = params.get("store_path", store_path)
-                engine = _get_engine(sp)
+                engine = _resolve_engine(params, default_engine)
+                if isinstance(engine, dict):
+                    _send(_error(req_id, -32602, engine["error"]))
+                    continue
                 result = _handle_resources_read(params.get("uri", ""), engine)
                 _send({"jsonrpc": "2.0", "id": req_id, "result": result})
 
@@ -488,8 +537,10 @@ def main(store_path: str = ".locus") -> None:
                 })
 
             elif method == "prompts/get":
-                sp = params.get("store_path", store_path)
-                engine = _get_engine(sp)
+                engine = _resolve_engine(params, default_engine)
+                if isinstance(engine, dict):
+                    _send(_error(req_id, -32602, engine["error"]))
+                    continue
                 messages = render_prompt(
                     name=params.get("name", ""),
                     args=params.get("arguments", {}),
@@ -501,24 +552,31 @@ def main(store_path: str = ".locus") -> None:
                     "result": {"messages": messages},
                 })
 
-            elif method in ("notifications/initialized",):
-                pass
+            elif method == "ping":
+                _send({"jsonrpc": "2.0", "id": req_id, "result": {}})
 
             elif method in ("shutdown", "exit"):
                 break
 
+            elif "id" not in request:
+                # Notifications (e.g. notifications/initialized) never get a response
+                pass
+
+            else:
+                _send(_error(req_id, -32601, f"Method not found: {method}"))
+
         except Exception as e:
             req_id = request.get("id") if isinstance(request, dict) else None
-            _send({
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "error": {"code": -32603, "message": type(e).__name__},
-            })
+            _send(_error(req_id, -32603, type(e).__name__))
             request = None
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Locus MCP server")
+def cli(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Locus MCP stdio server")
     parser.add_argument("--store", default=".locus")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     main(store_path=args.store)
+
+
+if __name__ == "__main__":
+    cli()

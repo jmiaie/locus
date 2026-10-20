@@ -1,9 +1,13 @@
 """
 OMPA Bridge — import an OMPA vault into a Locus store.
 
-OMPA (Obsidian-MemPalace-Agnostic) uses the same triple store schema as
-Locus (subject / predicate / object / valid_from / valid_to / source), so
-KG import is a direct row copy.
+OMPA (Obsidian-MemPalace-Agnostic) stores triples in
+``.palace/knowledge_graph.sqlite3`` with columns subject / predicate / object /
+valid_from / valid_to / confidence / source_file (see
+``ompa/knowledge_graph.py``).  The bridge maps ``source_file`` onto Locus's
+``source`` field.  Older or foreign tables that use ``source`` are accepted too.
+A triples table missing the required columns raises
+:class:`OMPASchemaError` instead of silently importing nothing.
 
 The bridge:
   1. Indexes all markdown files in the OMPA vault into the Locus corpus
@@ -24,11 +28,20 @@ CLI:
 
 import logging
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _OMPA_KG_PATH = Path(".palace") / "knowledge_graph.sqlite3"
+_REQUIRED_COLUMNS = ("subject", "predicate", "object", "valid_from", "valid_to")
+_SOURCE_COLUMNS = ("source_file", "source")
+# OMPA stamps its KG contract version in PRAGMA user_version; 0 = pre-stamp (same shape as 1)
+_SUPPORTED_KG_VERSIONS = (0, 1)
+
+
+class OMPASchemaError(RuntimeError):
+    """The OMPA knowledge graph does not have the schema the bridge expects."""
 
 
 class OMPABridge:
@@ -52,12 +65,15 @@ class OMPABridge:
         if not self.vault_path.exists():
             return {"error": f"Vault path not found: {self.vault_path}"}
 
+        # Read (and schema-check) the KG first so a bad vault fails before indexing
+        rows = self._read_kg_rows()
+
         # 1. Index markdown documents
         chunks = self.engine.corpus.add_directory(self.vault_path, pattern=pattern)
         logger.info("OMPA bridge: indexed %d chunks from %s", chunks, self.vault_path)
 
         # 2. Import KG triples
-        triples = self._import_kg()
+        triples = self._import_rows(rows)
 
         return {
             "vault": str(self.vault_path),
@@ -68,22 +84,42 @@ class OMPABridge:
 
     def _import_kg(self) -> int:
         """Copy triples from OMPA's knowledge_graph.sqlite3 into Locus KG."""
+        return self._import_rows(self._read_kg_rows())
+
+    def _read_kg_rows(self) -> list[tuple]:
         kg_db = self.vault_path / _OMPA_KG_PATH
         if not kg_db.exists():
             logger.debug("No OMPA KG found at %s — skipping triple import", kg_db)
-            return 0
+            return []
 
+        uri = f"{kg_db.resolve().as_uri()}?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True)) as conn:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if version not in _SUPPORTED_KG_VERSIONS:
+                raise OMPASchemaError(
+                    f"OMPA KG at {kg_db} has schema version {version}; "
+                    f"this Locus reads versions {list(_SUPPORTED_KG_VERSIONS)}"
+                )
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(triples)")}
+            if not columns:
+                raise OMPASchemaError(f"No 'triples' table in OMPA KG at {kg_db}")
+            missing = [c for c in _REQUIRED_COLUMNS if c not in columns]
+            source_col = next((c for c in _SOURCE_COLUMNS if c in columns), None)
+            if missing or source_col is None:
+                if source_col is None:
+                    missing.append("source_file")
+                raise OMPASchemaError(
+                    f"OMPA KG at {kg_db} is missing column(s) {missing}; "
+                    f"found {sorted(columns)}"
+                )
+            rows = conn.execute(
+                "SELECT subject, predicate, object, valid_from, valid_to, "
+                f"{source_col} FROM triples"
+            ).fetchall()
+        return rows
+
+    def _import_rows(self, rows: list[tuple]) -> int:
         count = 0
-        try:
-            with sqlite3.connect(str(kg_db)) as conn:
-                rows = conn.execute(
-                    "SELECT subject, predicate, object, valid_from, valid_to, source "
-                    "FROM triples"
-                ).fetchall()
-        except Exception as e:
-            logger.warning("Could not read OMPA KG: %s", e)
-            return 0
-
         for subject, predicate, obj, valid_from, valid_to, source in rows:
             if subject and predicate and obj:
                 try:
@@ -95,7 +131,7 @@ class OMPABridge:
                     )
                     count += 1
                 except Exception:
-                    pass
+                    logger.warning("OMPA bridge: skipped triple %r", (subject, predicate, obj), exc_info=True)
 
         logger.info("OMPA bridge: imported %d KG triples", count)
         return count

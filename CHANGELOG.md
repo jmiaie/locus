@@ -7,7 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Security
+- **HTTP server binds `127.0.0.1` by default** (was `0.0.0.0`). Binding any non-loopback host now requires `--token`; `serve()` / `make_server()` raise `ValueError` otherwise. Token comparison is constant-time. `/tools` now requires the token when one is set.
+- **No wildcard CORS.** CORS headers are only sent for an explicit `--cors-origin`; `*` is rejected. `POST /rpc` requires `Content-Type: application/json`.
+- **Safe snapshot restore.** Extraction uses `tarfile` `filter="data"` where available; archives with absolute, `..`, symlink, hardlink or device members are rejected. `overwrite=True` only wipes an empty directory or an existing Locus store, never the filesystem root or home directory. The `locus_restore` MCP tool only restores to a relative path inside the server's working directory.
+
+### Fixed
+- **MCP stdio server honours `--store`.** Tool calls, resources and prompts use the configured store unless a call passes `store_path`; `locus --store X mcp` now works too. The HTTP server uses the engine passed to `serve()`.
+- **JSON-RPC:** `ping` returns an empty result; unknown methods with an `id` get a `-32601 Method not found` error (notifications still get no response). The HTTP transport answers `ping` too.
+- **OMPA bridge** read a non-existent `source` column (OMPA uses `source_file`) and silently imported 0 triples. It now maps `source_file` → `source`, checks the schema before indexing, and raises `OMPASchemaError` on a mismatch (the MCP tool returns the message).
+- **Docs drift:** README version, test count, tool count (47) and full tool table now match the code; tests keep the tool count, version and `server.json` in sync. Install lines show macOS/Linux and Windows forms.
+
 ### Added
+- **`server.json`** — MCP registry manifest (PyPI `locus-rag`, stdio, `uvx locus-rag mcp --store PATH`) and an `mcp-name` marker in the README.
+- **`locus-rag` console script** (alias of `locus`) so `uvx locus-rag ...` works; the `mcp.servers` entry point now parses `--store`.
+- **`locus.bench.beir`** — scores Locus and `rank_bm25` on a local BEIR-format dataset (nDCG@10, Recall@k, MRR). No downloads; the embedding baseline is a `NotImplementedError` stub (ROADMAP N3).
+- **`docs/PRD.md`, `docs/ROADMAP.md`** — Locus as the retrieval half of the OMPA + Locus MCP bundle.
 - **`LocusEngine.stream_retrieve`** — runs the six existing retrieval signals one at a time and yields new chunks as each signal returns, with `StreamingRetriever` time-budget dropout. Not RRF; order can differ from `retrieve()`.
 - **`examples/mcp_sales_demo.py`** — end-to-end MCP sales/consulting demo: sample notes → `locus_index` / `locus_retrieve` / `locus_explain` / KG / doctor via the same tool dispatcher MCP clients use (stdlib + locus only)
 - **README Companion stack** — honest roles for Locus (retrieval), OMPA (vault memory), CognitionOS (compliance product)

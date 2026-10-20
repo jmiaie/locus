@@ -6,7 +6,7 @@ Locus is a **vectorless RAG engine** with MCP integration. No embedding models, 
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -v         # 207 tests, all should pass
+pytest tests/ -v         # 280 tests, all should pass
 locus --help             # CLI entry point
 ```
 
@@ -76,4 +76,4 @@ Extras:     LocusWatcher · LocusEval · OMPABridge · LocusDoctor · KGExporter
 | `locus/doctor.py` | `LocusDoctor` — health diagnostics |
 | `locus/export.py` | `KGExporter` — GraphML, JSONL, DOT |
 | `locus/watcher.py` | `LocusWatcher` — polling file watcher |
-| `tests/test_locus.py` | 167 tests covering all modules |
+| `tests/test_locus.py` | Main test suite (see `pytest tests/ -q` for the current count) |
