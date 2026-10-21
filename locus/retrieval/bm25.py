@@ -1,25 +1,28 @@
 """
-BM25+ retriever — Robertson BM25 with delta floor.
-Pure Python, zero external dependencies.
+BM25 retriever — first-stage lexical retrieval.
 
-Optimisations over v0.1.0:
-- IDF values cached per-term, invalidated when corpus doc_count changes
-- Top-k chunks fetched in a single batch query instead of N individual fetches
-- doc_count and avg_doc_length read from corpus cache (not re-queried per search)
+Scoring is delegated to the corpus index backend:
+
+* ``fts5``   — SQLite FTS5 ``bm25()`` (C implementation, inverted index)
+* ``legacy`` — pure-Python BM25 over the ``term_index`` table
+
+Both use Okapi BM25 with k1=1.2, b=0.75 and FTS5's IDF
+(``log((N - n + 0.5) / (n + 0.5))``, floored at 1e-6), computed per chunk.
+Results are ordered by score descending, then index order (chunk rowid), so
+the output is fully deterministic.  Searching never writes to the store.
 """
 
-import math
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
 
-from ..memory.corpus import Corpus, tokenize
+from ..memory.corpus import BM25_B, BM25_K1, Corpus, tokenize
 
 logger = logging.getLogger(__name__)
 
-K1 = 1.5
-B = 0.75
-DELTA = 0.5
+# Kept for backwards compatibility with code that imported these names.
+K1 = BM25_K1
+B = BM25_B
+DELTA = 0.0
 
 
 @dataclass
@@ -35,63 +38,15 @@ class ScoredChunk:
 class BM25Retriever:
     def __init__(self, corpus: Corpus):
         self.corpus = corpus
-        self._idf_cache: dict[str, float] = {}
-        self._cache_doc_count: int = -1
-
-    def _get_idf(self, term: str, N: int, df: int) -> float:
-        """Return cached IDF, invalidating the cache if corpus size changed."""
-        if N != self._cache_doc_count:
-            self._idf_cache.clear()
-            self._cache_doc_count = N
-        if term not in self._idf_cache:
-            self._idf_cache[term] = math.log((N - df + 0.5) / (df + 0.5) + 1)
-        return self._idf_cache[term]
 
     def search(self, query: str, limit: int = 10) -> list[ScoredChunk]:
         terms = tokenize(query)
-        if not terms:
+        if not terms or limit <= 0:
             return []
-
-        N = self.corpus.doc_count()
-        avgdl = self.corpus.avg_doc_length()
-        if N == 0 or avgdl == 0:
+        ranked = self.corpus.search_bm25(terms, limit=limit)
+        if not ranked:
             return []
-
-        # Pass 1: accumulate partial scores (tf contribution only; dl normalisation in pass 2)
-        partial: dict[str, float] = {}   # chunk_id -> sum of idf * tf (unnormalised)
-        chunk_tf: dict[str, dict[str, float]] = {}  # chunk_id -> {term: tf}
-
-        for term in terms:
-            posting = self.corpus.get_posting_list(term)
-            if not posting:
-                continue
-            idf = self._get_idf(term, N, len(posting))
-            for chunk_id, tf in posting.items():
-                partial[chunk_id] = partial.get(chunk_id, 0.0) + idf
-                chunk_tf.setdefault(chunk_id, {})[term] = tf
-
-        if not partial:
-            return []
-
-        # Pass 2: fetch top candidate chunks in one batch, compute full BM25 scores
-        candidate_ids = sorted(partial, key=lambda x: partial[x], reverse=True)[: limit * 3]
-        chunks_map = self.corpus.get_chunks_batch(candidate_ids)
-
-        scores: dict[str, float] = {}
-        for chunk_id in candidate_ids:
-            chunk = chunks_map.get(chunk_id)
-            if not chunk:
-                continue
-            dl = len(chunk.content.split())
-            score = 0.0
-            for term, tf in chunk_tf.get(chunk_id, {}).items():
-                posting = self.corpus.get_posting_list(term)
-                idf = self._get_idf(term, N, len(posting))
-                norm_tf = (tf * (K1 + 1)) / (tf + K1 * (1 - B + B * dl / avgdl)) + DELTA
-                score += idf * norm_tf
-            scores[chunk_id] = score
-
-        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
+        chunks_map = self.corpus.get_chunks_batch([cid for cid, _ in ranked])
         results: list[ScoredChunk] = []
         for chunk_id, score in ranked:
             chunk = chunks_map.get(chunk_id)

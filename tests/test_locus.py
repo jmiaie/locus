@@ -644,7 +644,7 @@ def test_engine_bulletin_persists(tmp_path):
     f = tmp_path / "doc.md"
     f.write_text("Knowledge about the authentication and security system architecture.")
     e1.index(tmp_path)
-    e1.retrieve("authentication security")
+    e1.retrieve("authentication security", track=True)  # recording hits is opt-in
 
     # Re-open engine — bulletin should still have entries
     e2 = LocusEngine(store_path=store)
@@ -1008,7 +1008,7 @@ def test_engine_structural_via_retrieve(tmp_path):
         "Q1 planning meeting notes."
     )
     engine.index(tmp_path)
-    chunks = engine.retrieve("Q1 2025 meeting")
+    chunks = engine.retrieve("Q1 2025 meeting", mode="hybrid")  # re-rank signals are opt-in
     assert len(chunks) > 0
     assert any(c.provenance == "structural" for c in chunks)
 

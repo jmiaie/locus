@@ -120,6 +120,8 @@ def _call_tool(name: str, arguments: dict, engine: LocusEngine | None = None) ->
                 as_of=arguments.get("as_of"),
                 use_links=bool(arguments.get("use_links", True)),
                 intent=intent,
+                mode=arguments.get("mode"),
+                track=bool(arguments.get("track", True)),
             )
             return {
                 "intent": intent.value if intent else "auto",

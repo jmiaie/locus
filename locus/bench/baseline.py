@@ -60,8 +60,9 @@ class BaselineBench:
     def run(self, qa_pairs: "list[QAPair]", limit: int = 5) -> list[BaselineResult]:
         results: list[BaselineResult] = []
 
-        # --- Locus full pipeline ---
-        results.append(self._run_locus(qa_pairs, limit))
+        # --- Locus: default (BM25) and hybrid re-rank ---
+        results.append(self._run_locus(qa_pairs, limit, mode="bm25"))
+        results.append(self._run_locus(qa_pairs, limit, mode="hybrid"))
 
         # --- rank_bm25 ---
         if RANK_BM25_AVAILABLE:
@@ -83,15 +84,18 @@ class BaselineBench:
     # Locus
     # ------------------------------------------------------------------
 
-    def _run_locus(self, qa_pairs: "list[QAPair]", limit: int) -> BaselineResult:
+    def _run_locus(self, qa_pairs: "list[QAPair]", limit: int, mode: str = "bm25") -> BaselineResult:
         return self._score(
-            system="locus_6signal",
+            system=f"locus_{mode}",
             qa_pairs=qa_pairs,
             retrieve_fn=lambda q: [
                 c.doc_path for c in
-                self._engine.retrieve(q, limit=limit, use_cache=False)
+                self._engine.retrieve(q, limit=limit, use_cache=False, mode=mode)
             ],
-            notes="BM25 + KG + LinkWalk + Structural + Recency + LinkPop + Reranker",
+            notes=(
+                "BM25 (SQLite FTS5)" if mode == "bm25"
+                else "BM25 pool re-ranked by KG + LinkWalk + Structural + Recency + LinkPop"
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -99,14 +103,14 @@ class BaselineBench:
     # ------------------------------------------------------------------
 
     def _run_rank_bm25(self, qa_pairs: "list[QAPair]", limit: int) -> BaselineResult:
-        docs = list(self._doc_dir.glob("**/*.md"))
+        docs = sorted(self._doc_dir.glob("**/*.md"))
         tokenized = [self._tokenize(d.read_text(encoding="utf-8")) for d in docs]
         bm25 = _BM25Okapi(tokenized)
 
         def retrieve(query: str) -> list[str]:
             tokens = self._tokenize(query)
             scores = bm25.get_scores(tokens)
-            ranked = sorted(range(len(scores)), key=lambda i: -scores[i])
+            ranked = sorted(range(len(scores)), key=lambda i: (-scores[i], i))
             return [docs[i].name for i in ranked[:limit]]
 
         return self._score(
@@ -121,7 +125,7 @@ class BaselineBench:
     # ------------------------------------------------------------------
 
     def _run_grep(self, qa_pairs: "list[QAPair]", limit: int) -> BaselineResult:
-        docs = list(self._doc_dir.glob("**/*.md"))
+        docs = sorted(self._doc_dir.glob("**/*.md"))
         contents = {d.name: d.read_text(encoding="utf-8").lower() for d in docs}
 
         def retrieve(query: str) -> list[str]:
@@ -131,7 +135,7 @@ class BaselineBench:
                 hits = sum(text.count(t) for t in terms)
                 if hits > 0:
                     scored.append((name, hits))
-            scored.sort(key=lambda x: -x[1])
+            scored.sort(key=lambda x: (-x[1], x[0]))
             return [name for name, _ in scored[:limit]]
 
         return self._score(

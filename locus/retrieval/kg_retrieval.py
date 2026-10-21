@@ -54,14 +54,14 @@ class KGRetriever:
                 for src in self.kg.sources_for_entity(related, as_of=as_of):
                     source_scores[src] = source_scores.get(src, 0.0) + weight * 0.3
 
-        ranked = sorted(source_scores.items(), key=lambda x: x[1], reverse=True)
+        ranked = sorted(source_scores.items(), key=lambda x: (-x[1], x[0]))[: limit * 3]
+        firsts = self.corpus.first_chunks([s for s, _ in ranked])
 
         results: list[ScoredChunk] = []
         for source, score in ranked:
-            chunks = self.corpus.get_chunks_for_doc(source)
-            if not chunks:
+            c = firsts.get(source)
+            if c is None:
                 continue
-            c = chunks[0]
             results.append(
                 ScoredChunk(
                     chunk_id=c.id,
@@ -75,3 +75,26 @@ class KGRetriever:
             if len(results) >= limit:
                 break
         return results
+
+
+def kg_source_scores(
+    kg: TemporalKG, query: str, as_of: str | None = None, max_entities: int = 8,
+) -> dict[str, float]:
+    """``{source doc_path: score}`` from query entities and one-hop neighbours.
+
+    Same scoring as :meth:`KGRetriever.search` but without materialising
+    chunks, for use as a re-ranking feature over a candidate set.
+    """
+    scores: dict[str, float] = {}
+    for entity in extract_query_entities(query)[:max_entities]:
+        triples = kg.query_entity(entity, as_of=as_of)
+        if not triples:
+            continue
+        weight = 1.0 / (1 + len(triples))
+        for src in kg.sources_for_entity(entity, as_of=as_of):
+            scores[src] = scores.get(src, 0.0) + weight
+        for triple in triples[:5]:
+            related = triple.object if triple.subject == entity else triple.subject
+            for src in kg.sources_for_entity(related, as_of=as_of):
+                scores[src] = scores.get(src, 0.0) + weight * 0.3
+    return scores

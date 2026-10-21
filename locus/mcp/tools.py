@@ -24,9 +24,10 @@ TOOLS: dict[str, dict] = {
     },
     "locus_retrieve": {
         "description": (
-            "Six-signal retrieval: BM25 + KG entity expansion + link walking + "
-            "frontmatter structural matching + recency prior + link popularity, "
-            "fused via weighted RRF. "
+            "BM25 retrieval (SQLite FTS5) with an optional re-rank of the BM25 candidates by "
+            "KG entity expansion, link walking, frontmatter structural matching, recency and "
+            "link popularity (mode='hybrid', weighted RRF). Default mode is 'bm25'; passing "
+            "as_of selects 'hybrid'. Deterministic. "
             "Each result carries a provenance tag (bm25 / kg / link:hopN / structural / recency / link_pop)."
         ),
         "input_schema": {
@@ -38,6 +39,14 @@ TOOLS: dict[str, dict] = {
                 "use_links": {"type": "boolean", "default": True},
                 "full_content": {"type": "boolean", "default": False},
                 "intent": {"type": "string", "enum": ["kg_first", "bm25_first", "balanced"]},
+                "mode": {
+                    "type": "string", "enum": ["bm25", "hybrid"],
+                    "description": "bm25 (default) or hybrid re-rank.",
+                },
+                "track": {
+                    "type": "boolean", "default": True,
+                    "description": "Record hits in the hot-context bulletin (set false for a pure read).",
+                },
                 "store_path": {"type": "string", "default": ".locus"},
             },
             "required": ["query"],

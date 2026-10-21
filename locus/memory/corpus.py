@@ -1,17 +1,36 @@
 """
-Corpus — SQLite-backed document store with inverted term index for BM25.
+Corpus — SQLite-backed document store with a lexical (BM25) index.
 
-Supports section-aware chunking, checksum deduplication, and batch retrieval.
-Schema is migration-safe (additive ALTER TABLE for new columns).
+Two interchangeable index backends, both pure standard library:
+
+* ``fts5`` (default) — a SQLite FTS5 inverted index ranked with FTS5's
+  built-in ``bm25()``.  Query cost grows with the size of the matching
+  posting lists, not with the corpus, so it stays fast at 100k+ chunks.
+* ``legacy`` — the original ``term_index`` table scored in Python.  Used
+  automatically when the interpreter's SQLite was built without FTS5, and
+  selectable with ``LOCUS_INDEX_BACKEND=legacy``.
+
+Both backends index the *same* token stream (:func:`tokenize`) and use the
+same BM25 formula (k1=1.2, b=0.75, FTS5's IDF), so they rank identically up
+to floating-point rounding.  Ties are broken by index order (chunk rowid),
+never by hash order, so results are reproducible run to run.
+
+Stores written by Locus <= 1.0.0 (``term_index`` only) are migrated
+in place to FTS5 the first time they are opened; see :meth:`Corpus.rebuild_index`
+for an explicit clean re-index path.
 """
+
+from __future__ import annotations
 
 import hashlib
 import json
 import logging
-import sqlite3
+import math
+import os
 import re
+import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from .chunker import Chunker, Chunk
 
@@ -27,11 +46,55 @@ STOPWORDS = frozenset({
     "it", "its", "as", "not", "no", "so", "if", "then", "than", "more",
 })
 
+# BM25 parameters.  FTS5's bm25() hard-codes k1=1.2, b=0.75; the legacy
+# backend uses the same values so the two backends agree.
+BM25_K1 = 1.2
+BM25_B = 0.75
+
+SCHEMA_VERSION = "2"
+BACKENDS = ("fts5", "legacy")
+
+_FTS_TOKENIZER = "ascii tokenchars '_'"
+
 
 def tokenize(text: str) -> list[str]:
     text = text.lower()
     text = re.sub(r"[^\w\s]", " ", text)
     return [w for w in text.split() if w not in STOPWORDS and len(w) > 1]
+
+
+_FTS5_AVAILABLE: Optional[bool] = None
+
+
+def fts5_available() -> bool:
+    """True if this Python's sqlite3 module was compiled with FTS5."""
+    global _FTS5_AVAILABLE
+    if _FTS5_AVAILABLE is None:
+        try:
+            conn = sqlite3.connect(":memory:")
+            try:
+                conn.execute("CREATE VIRTUAL TABLE _probe USING fts5(x)")
+                _FTS5_AVAILABLE = True
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            _FTS5_AVAILABLE = False
+    return _FTS5_AVAILABLE
+
+
+def _default_backend() -> str:
+    env = os.environ.get("LOCUS_INDEX_BACKEND", "").strip().lower()
+    if env in BACKENDS:
+        if env == "fts5" and not fts5_available():
+            logger.warning("LOCUS_INDEX_BACKEND=fts5 but SQLite lacks FTS5; using legacy")
+            return "legacy"
+        return env
+    return "fts5" if fts5_available() else "legacy"
+
+
+def _fts_query(terms: Iterable[str]) -> str:
+    # Terms come from tokenize(): only \w characters, so quoting is safe.
+    return " OR ".join(f'"{t}"' for t in terms)
 
 
 class Corpus:
@@ -59,34 +122,152 @@ class Corpus:
         checksum   TEXT,
         indexed_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT
+    );
     """
 
-    def __init__(self, store_path: Path, section_aware: bool = True):
+    _FTS_SCHEMA = f"""
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
+        body, tokenize="{_FTS_TOKENIZER}"
+    );
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts_row USING fts5vocab(chunk_fts, row);
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts_inst USING fts5vocab(chunk_fts, instance);
+    """
+
+    def __init__(
+        self,
+        store_path: Path,
+        section_aware: bool = True,
+        backend: Optional[str] = None,
+    ):
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.store_path / "corpus.sqlite3")
         self._chunker = Chunker(section_aware=section_aware)
         self._N_cache: Optional[int] = None
         self._avgdl_cache: Optional[float] = None
+        self._chunk_stats_cache: Optional[tuple[int, float]] = None
+        self._requested_backend = backend
+        self.backend: str = "legacy"
+        #: Bumped on every write; lets in-memory caches detect stale data.
+        self.generation: int = 0
         self._init_db()
 
+    # ------------------------------------------------------------------
+    # Schema, backend selection & migration
+    # ------------------------------------------------------------------
+
     def _init_db(self) -> None:
+        if self._requested_backend is not None and self._requested_backend not in BACKENDS:
+            raise ValueError(f"Unknown index backend {self._requested_backend!r}; use one of {BACKENDS}")
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(self._SCHEMA)
-            # Migration: add checksum column if missing (pre-Phase-1 corpus)
-            cols = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(doc_stats)").fetchall()
-            }
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(doc_stats)").fetchall()}
             if "checksum" not in cols:
                 conn.execute("ALTER TABLE doc_stats ADD COLUMN checksum TEXT")
+            ccols = {row[1] for row in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+            if "n_tokens" not in ccols:
+                conn.execute("ALTER TABLE chunks ADD COLUMN n_tokens INTEGER")
+            stored = self._meta_get(conn, "index_backend")
+            has_chunks = conn.execute("SELECT 1 FROM chunks LIMIT 1").fetchone() is not None
+
+        want = self._requested_backend or _default_backend()
+        if want == "fts5" and not fts5_available():
+            logger.warning("SQLite FTS5 not available; falling back to legacy index backend")
+            want = "legacy"
+
+        if stored is None:
+            # New store, or a store written by Locus <= 1.0.0 (legacy term_index).
+            current = "legacy" if has_chunks else want
+        else:
+            current = stored
+
+        if current == "fts5" and not fts5_available():
+            # Store was built with FTS5 on another interpreter: rebuild legacy postings.
+            logger.warning("Store uses FTS5 but this SQLite lacks it; rebuilding legacy index")
+            current = "fts5-unavailable"
+
+        self.backend = want
+        if want == "fts5":
+            with self._conn() as conn:
+                conn.executescript(self._FTS_SCHEMA)
+        if current != want and has_chunks:
+            logger.info("Migrating Locus index %s -> %s", current, want)
+            self.rebuild_index(backend=want, _from=current)
+        with self._conn() as conn:
+            self._meta_set(conn, "index_backend", want)
+            self._meta_set(conn, "schema_version", SCHEMA_VERSION)
+
+    @staticmethod
+    def _meta_get(conn: sqlite3.Connection, key: str) -> Optional[str]:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    @staticmethod
+    def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+
+    def rebuild_index(self, backend: Optional[str] = None, _from: Optional[str] = None) -> dict:
+        """
+        Rebuild the lexical index from the stored chunk text.
+
+        Used for automatic migration of pre-1.1 stores and available as an
+        explicit clean re-index path (``locus reindex``).  The chunk table is
+        the source of truth, so no source files need to be re-read.
+        Returns ``{"backend": ..., "chunks": n}``.
+        """
+        backend = backend or self.backend
+        if backend == "fts5" and not fts5_available():
+            raise RuntimeError("SQLite FTS5 is not available in this Python build")
+        with self._conn() as conn:
+            if backend == "fts5":
+                conn.executescript(self._FTS_SCHEMA)
+                conn.execute("DELETE FROM chunk_fts")
+            else:
+                conn.execute("DELETE FROM term_index")
+            n = 0
+            cur = conn.execute("SELECT rowid, id, content FROM chunks ORDER BY rowid")
+            batch_fts: list[tuple[int, str]] = []
+            batch_terms: list[tuple[str, str, float]] = []
+            batch_len: list[tuple[int, int]] = []
+            for rowid, cid, content in cur.fetchall():
+                terms = tokenize(content)
+                batch_len.append((len(terms), rowid))
+                if backend == "fts5":
+                    batch_fts.append((rowid, " ".join(terms)))
+                else:
+                    batch_terms.extend(self._term_rows(cid, terms))
+                n += 1
+            conn.executemany("UPDATE chunks SET n_tokens = ? WHERE rowid = ?", batch_len)
+            if backend == "fts5":
+                conn.executemany("INSERT INTO chunk_fts(rowid, body) VALUES (?, ?)", batch_fts)
+                # Legacy postings are superseded; drop them to reclaim space.
+                conn.execute("DELETE FROM term_index")
+            else:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO term_index (term, chunk_id, tf) VALUES (?, ?, ?)",
+                    batch_terms,
+                )
+                try:
+                    conn.execute("DELETE FROM chunk_fts")
+                except sqlite3.OperationalError:
+                    pass  # no FTS5 table / module
+            self._meta_set(conn, "index_backend", backend)
+        self.backend = backend
+        self._invalidate_stats()
+        return {"backend": backend, "chunks": n, "migrated_from": _from}
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
 
     def _invalidate_stats(self) -> None:
+        self.generation += 1
         self._N_cache = None
         self._avgdl_cache = None
+        self._chunk_stats_cache = None
 
     # ------------------------------------------------------------------
     # Indexing
@@ -96,11 +277,13 @@ class Corpus:
     def _file_checksum(path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
-    def _stored_checksum(self, doc_path: str) -> Optional[str]:
-        with self._conn() as conn:
-            row = conn.execute(
-                "SELECT checksum FROM doc_stats WHERE doc_path = ?", (doc_path,)
-            ).fetchone()
+    def _stored_checksum(self, doc_path: str, conn: sqlite3.Connection | None = None) -> Optional[str]:
+        if conn is None:
+            with self._conn() as c:
+                return self._stored_checksum(doc_path, c)
+        row = conn.execute(
+            "SELECT checksum FROM doc_stats WHERE doc_path = ?", (doc_path,)
+        ).fetchone()
         return row[0] if row else None
 
     def add_file(self, path: Path, base_path: Path = None, force: bool = False) -> int:
@@ -108,91 +291,222 @@ class Corpus:
         Index a file. Returns number of chunks added.
         Skips unchanged files (checksum dedup) unless force=True.
         """
+        with self._conn() as conn:
+            added = self._add_file(conn, Path(path), base_path=base_path, force=force)
+        self._invalidate_stats()
+        return added
+
+    def _add_file(
+        self,
+        conn: sqlite3.Connection,
+        path: Path,
+        base_path: Path | None = None,
+        force: bool = False,
+    ) -> int:
         chunks = self._chunker.chunk_file(path, base_path=base_path)
         if not chunks:
             return 0
         doc_id = chunks[0].doc_path
-
-        if not force:
-            try:
-                checksum = self._file_checksum(path)
-                if checksum == self._stored_checksum(doc_id):
-                    return 0
-            except Exception:
-                logger.debug("Checksum check failed for %s, re-indexing", path)
-
-        self._remove_doc(doc_id)
-        for chunk in chunks:
-            self._store_chunk(chunk)
-
-        word_count = sum(len(c.content.split()) for c in chunks)
         try:
-            checksum = self._file_checksum(path)
+            checksum: Optional[str] = self._file_checksum(path)
         except Exception:
+            logger.debug("Checksum failed for %s, re-indexing", path)
             checksum = None
+        if not force and checksum is not None and checksum == self._stored_checksum(doc_id, conn):
+            return 0
 
-        with self._conn() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO doc_stats (doc_path, word_count, checksum) VALUES (?, ?, ?)",
-                (doc_id, word_count, checksum),
-            )
-        self._invalidate_stats()
-        return len(chunks)
+        self._remove_doc_conn(conn, doc_id)
+        # Chunk ids hash (source, section); a repeated heading yields a repeated
+        # id.  Keep the last occurrence (same as the old INSERT OR REPLACE).
+        unique: dict[str, Chunk] = {}
+        for chunk in chunks:
+            unique.pop(chunk.id, None)
+            unique[chunk.id] = chunk
+        for chunk in unique.values():
+            self._store_chunk_conn(conn, chunk)
+
+        word_count = sum(len(c.content.split()) for c in unique.values())
+        conn.execute(
+            "INSERT OR REPLACE INTO doc_stats (doc_path, word_count, checksum) VALUES (?, ?, ?)",
+            (doc_id, word_count, checksum),
+        )
+        return len(unique)
+
+    def iter_files(self, path: Path, pattern: str = "**/*.md") -> list[Path]:
+        """Files under *path* matching *pattern*, excluding tool dirs, sorted."""
+        path = Path(path)
+        return sorted(
+            f for f in path.glob(pattern)
+            if f.is_file() and not any(ex in f.parts for ex in _EXCLUDE)
+        )
 
     def add_directory(self, path: Path, pattern: str = "**/*.md") -> int:
-        path = Path(path)
-        total = 0
-        for f in path.glob(pattern):
-            if any(ex in f.parts for ex in _EXCLUDE):
-                continue
-            total += self.add_file(f, base_path=path)
+        total, _ = self.add_directory_changed(path, pattern=pattern)
         return total
 
-    def remove_file(self, doc_path: str) -> int:
-        return self._remove_doc(doc_path)
-
-    def _remove_doc(self, doc_path: str) -> int:
-        with self._conn() as conn:
-            ids = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT id FROM chunks WHERE doc_path = ?", (doc_path,)
-                ).fetchall()
-            ]
-            if not ids:
-                return 0
-            ph = ",".join("?" * len(ids))
-            conn.execute(f"DELETE FROM term_index WHERE chunk_id IN ({ph})", ids)
-            conn.execute("DELETE FROM chunks WHERE doc_path = ?", (doc_path,))
-            conn.execute("DELETE FROM doc_stats WHERE doc_path = ?", (doc_path,))
+    def add_directory_changed(
+        self, path: Path, pattern: str = "**/*.md", batch_size: int = 500,
+    ) -> tuple[int, list[Path]]:
+        """Index a directory; return (chunks added, files that changed)."""
+        path = Path(path)
+        total = 0
+        changed: list[Path] = []
+        conn = self._conn()
+        try:
+            conn.execute("PRAGMA synchronous = NORMAL")
+            pending = 0
+            for f in self.iter_files(path, pattern):
+                n = self._add_file(conn, f, base_path=path)
+                if n:
+                    total += n
+                    changed.append(f)
+                    pending += 1
+                if pending >= batch_size:
+                    conn.commit()
+                    pending = 0
+            conn.commit()
+        finally:
+            conn.close()
         self._invalidate_stats()
-        return len(ids)
+        return total, changed
 
-    def _store_chunk(self, chunk: Chunk) -> None:
+    def remove_file(self, doc_path: str) -> int:
         with self._conn() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO chunks (id, doc_path, content, start_word, metadata) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    chunk.id,
-                    chunk.doc_path,
-                    chunk.content,
-                    chunk.start_word,
-                    json.dumps(chunk.metadata),
-                ),
-            )
-        terms = tokenize(chunk.content)
-        if not terms:
-            return
+            n = self._remove_doc_conn(conn, doc_path)
+        self._invalidate_stats()
+        return n
+
+    def _remove_doc(self, doc_path: str) -> int:  # backwards-compatible alias
+        return self.remove_file(doc_path)
+
+    def _remove_doc_conn(self, conn: sqlite3.Connection, doc_path: str) -> int:
+        rows = conn.execute(
+            "SELECT rowid, id FROM chunks WHERE doc_path = ?", (doc_path,)
+        ).fetchall()
+        conn.execute("DELETE FROM doc_stats WHERE doc_path = ?", (doc_path,))
+        if not rows:
+            return 0
+        if self.backend == "fts5":
+            conn.executemany("DELETE FROM chunk_fts WHERE rowid = ?", [(r[0],) for r in rows])
+        else:
+            conn.executemany("DELETE FROM term_index WHERE chunk_id = ?", [(r[1],) for r in rows])
+        conn.execute("DELETE FROM chunks WHERE doc_path = ?", (doc_path,))
+        return len(rows)
+
+    @staticmethod
+    def _term_rows(chunk_id: str, terms: list[str]) -> list[tuple[str, str, float]]:
         freq: dict[str, int] = {}
         for t in terms:
             freq[t] = freq.get(t, 0) + 1
         total = len(terms)
-        with self._conn() as conn:
+        # tf stored normalised (count / chunk length), as in Locus <= 1.0.0
+        return [(t, chunk_id, c / total) for t, c in sorted(freq.items())]
+
+    def _store_chunk_conn(self, conn: sqlite3.Connection, chunk: Chunk) -> None:
+        terms = tokenize(chunk.content)
+        cur = conn.execute(
+            "INSERT OR REPLACE INTO chunks (id, doc_path, content, start_word, metadata, n_tokens) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (chunk.id, chunk.doc_path, chunk.content, chunk.start_word,
+             json.dumps(chunk.metadata, sort_keys=True), len(terms)),
+        )
+        if not terms:
+            return
+        if self.backend == "fts5":
+            conn.execute(
+                "INSERT INTO chunk_fts(rowid, body) VALUES (?, ?)",
+                (cur.lastrowid, " ".join(terms)),
+            )
+        else:
             conn.executemany(
                 "INSERT OR REPLACE INTO term_index (term, chunk_id, tf) VALUES (?, ?, ?)",
-                [(t, chunk.id, count / total) for t, count in freq.items()],
+                self._term_rows(chunk.id, terms),
             )
+
+    def _store_chunk(self, chunk: Chunk) -> None:  # kept for API compatibility
+        with self._conn() as conn:
+            self._store_chunk_conn(conn, chunk)
+        self._invalidate_stats()
+
+    # ------------------------------------------------------------------
+    # BM25 search
+    # ------------------------------------------------------------------
+
+    def search_bm25(self, terms: list[str], limit: int = 10) -> list[tuple[str, float]]:
+        """
+        Rank chunks for the (already tokenised) query *terms* with BM25.
+
+        Returns ``[(chunk_id, score), ...]`` sorted by score descending, ties
+        broken by index order (chunk rowid; files are indexed in sorted path
+        order).  Read-only and deterministic.
+        """
+        if not terms or limit <= 0:
+            return []
+        if self.backend == "fts5":
+            return self._search_fts5(terms, limit)
+        return self._search_legacy(terms, limit)
+
+    _FTS_TOPK = (
+        "SELECT rowid, -bm25(chunk_fts) AS s FROM chunk_fts "
+        "WHERE chunk_fts MATCH ? ORDER BY s DESC, rowid LIMIT ?"
+    )
+
+    def _search_fts5(self, terms: list[str], limit: int) -> list[tuple[str, float]]:
+        """Top-*limit* chunks by FTS5 ``bm25()``; ties broken by index order (rowid)."""
+        with self._conn() as conn:
+            rows = conn.execute(self._FTS_TOPK, (_fts_query(terms), limit)).fetchall()
+            if not rows:
+                return []
+            ph = ",".join("?" * len(rows))
+            ids = dict(conn.execute(
+                f"SELECT rowid, id FROM chunks WHERE rowid IN ({ph})", [r[0] for r in rows]
+            ).fetchall())
+        return [(ids[r[0]], float(r[1])) for r in rows if r[0] in ids]
+
+    def _chunk_stats(self, conn: sqlite3.Connection) -> tuple[int, float]:
+        if self._chunk_stats_cache is None:
+            missing = conn.execute(
+                "SELECT rowid, content FROM chunks WHERE n_tokens IS NULL"
+            ).fetchall()
+            if missing:
+                conn.executemany(
+                    "UPDATE chunks SET n_tokens = ? WHERE rowid = ?",
+                    [(len(tokenize(c)), r) for r, c in missing],
+                )
+                conn.commit()
+            n, avg = conn.execute(
+                "SELECT COUNT(*), AVG(n_tokens) FROM chunks WHERE n_tokens > 0"
+            ).fetchone()
+            self._chunk_stats_cache = (n or 0, float(avg or 0.0))
+        return self._chunk_stats_cache
+
+    def _search_legacy(self, terms: list[str], limit: int) -> list[tuple[str, float]]:
+        with self._conn() as conn:
+            N, avgdl = self._chunk_stats(conn)
+            if N == 0 or avgdl == 0:
+                return []
+            scores: dict[str, float] = {}
+            order: dict[str, int] = {}
+            for term in terms:
+                rows = conn.execute(
+                    "SELECT t.chunk_id, t.tf, c.n_tokens, c.rowid FROM term_index t "
+                    "JOIN chunks c ON c.id = t.chunk_id WHERE t.term = ?",
+                    (term,),
+                ).fetchall()
+                if not rows:
+                    continue
+                n = len(rows)
+                idf = math.log((N - n + 0.5) / (n + 0.5))
+                if idf <= 0:
+                    idf = 1e-6
+                for cid, tf_norm, dl, rowid in rows:
+                    order[cid] = rowid
+                    dl = dl or 0
+                    tf = round(tf_norm * dl) if dl else 1
+                    denom = tf + BM25_K1 * (1 - BM25_B + BM25_B * dl / avgdl)
+                    scores[cid] = scores.get(cid, 0.0) + idf * tf * (BM25_K1 + 1) / denom
+        ranked = sorted(scores.items(), key=lambda x: (-x[1], order[x[0]]))
+        return ranked[:limit]
 
     # ------------------------------------------------------------------
     # Retrieval helpers
@@ -218,30 +532,86 @@ class Corpus:
         """Fetch multiple chunks in a single query."""
         if not chunk_ids:
             return {}
-        ph = ",".join("?" * len(chunk_ids))
+        out: dict[str, Chunk] = {}
+        ids = list(chunk_ids)
         with self._conn() as conn:
-            rows = conn.execute(
-                f"SELECT id, doc_path, content, start_word, metadata "
-                f"FROM chunks WHERE id IN ({ph})",
-                chunk_ids,
-            ).fetchall()
-        return {r[0]: self._row_to_chunk(r) for r in rows}
+            for i in range(0, len(ids), 900):
+                part = ids[i:i + 900]
+                ph = ",".join("?" * len(part))
+                for r in conn.execute(
+                    f"SELECT id, doc_path, content, start_word, metadata "
+                    f"FROM chunks WHERE id IN ({ph})",
+                    part,
+                ).fetchall():
+                    out[r[0]] = self._row_to_chunk(r)
+        return out
 
     def get_chunks_for_doc(self, doc_path: str) -> list[Chunk]:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT id, doc_path, content, start_word, metadata "
-                "FROM chunks WHERE doc_path = ? ORDER BY start_word",
+                "FROM chunks WHERE doc_path = ? ORDER BY start_word, rowid",
                 (doc_path,),
             ).fetchall()
         return [self._row_to_chunk(r) for r in rows]
 
+    def first_chunks(self, doc_paths: list[str]) -> dict[str, Chunk]:
+        """First chunk (by position) of each document, in one query."""
+        if not doc_paths:
+            return {}
+        out: dict[str, Chunk] = {}
+        paths = list(dict.fromkeys(doc_paths))
+        with self._conn() as conn:
+            for i in range(0, len(paths), 900):
+                part = paths[i:i + 900]
+                ph = ",".join("?" * len(part))
+                for r in conn.execute(
+                    f"SELECT id, doc_path, content, start_word, metadata FROM chunks "
+                    f"WHERE doc_path IN ({ph}) ORDER BY doc_path, start_word, rowid",
+                    part,
+                ).fetchall():
+                    if r[1] not in out:
+                        out[r[1]] = self._row_to_chunk(r)
+        return out
+
+    def iter_chunk_links(self):
+        """Yield the ``links`` metadata list of every chunk (one query)."""
+        with self._conn() as conn:
+            rows = conn.execute("SELECT metadata FROM chunks ORDER BY doc_path, rowid").fetchall()
+        for (meta,) in rows:
+            try:
+                links = json.loads(meta or "{}").get("links", [])
+            except ValueError:
+                links = []
+            if links:
+                yield links
+
     def get_posting_list(self, term: str) -> dict[str, float]:
+        """``{chunk_id: normalised tf}`` for every chunk containing *term*."""
+        if self.backend == "fts5":
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT c.id, COUNT(*), c.n_tokens FROM chunk_fts_inst v "
+                    "JOIN chunks c ON c.rowid = v.doc WHERE v.term = ? "
+                    "GROUP BY v.doc ORDER BY c.id",
+                    (term,),
+                ).fetchall()
+            return {r[0]: (r[1] / r[2] if r[2] else 0.0) for r in rows}
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT chunk_id, tf FROM term_index WHERE term = ?", (term,)
+                "SELECT chunk_id, tf FROM term_index WHERE term = ? ORDER BY chunk_id", (term,)
             ).fetchall()
         return {r[0]: r[1] for r in rows}
+
+    def term_chunk_frequency(self, term: str) -> int:
+        """Number of chunks containing *term* (document frequency)."""
+        with self._conn() as conn:
+            if self.backend == "fts5":
+                row = conn.execute("SELECT doc FROM chunk_fts_row WHERE term = ?", (term,)).fetchone()
+                return int(row[0]) if row else 0
+            return conn.execute(
+                "SELECT COUNT(*) FROM term_index WHERE term = ?", (term,)
+            ).fetchone()[0]
 
     def doc_count(self) -> int:
         if self._N_cache is None:
@@ -268,14 +638,31 @@ class Corpus:
         with self._conn() as conn:
             return [
                 r[0]
-                for r in conn.execute("SELECT doc_path FROM doc_stats").fetchall()
+                for r in conn.execute("SELECT doc_path FROM doc_stats ORDER BY doc_path").fetchall()
             ]
+
+    def doc_index_times(self, doc_paths: list[str] | None = None) -> dict[str, Optional[str]]:
+        """``{doc_path: indexed_at}`` for the given docs (all docs if None)."""
+        with self._conn() as conn:
+            if doc_paths is None:
+                rows = conn.execute("SELECT doc_path, indexed_at FROM doc_stats").fetchall()
+            else:
+                rows = []
+                paths = list(dict.fromkeys(doc_paths))
+                for i in range(0, len(paths), 900):
+                    part = paths[i:i + 900]
+                    ph = ",".join("?" * len(part))
+                    rows += conn.execute(
+                        f"SELECT doc_path, indexed_at FROM doc_stats WHERE doc_path IN ({ph})", part
+                    ).fetchall()
+        return {r[0]: r[1] for r in rows}
 
     def stats(self) -> dict:
         return {
             "doc_count": self.doc_count(),
             "chunk_count": self.chunk_count(),
             "avg_doc_length": round(self.avg_doc_length(), 1),
+            "index_backend": self.backend,
         }
 
     # ------------------------------------------------------------------
@@ -285,8 +672,20 @@ class Corpus:
     def top_terms(self, limit: int = 20) -> list[dict]:
         """Return the *limit* most frequent terms across the entire corpus.
 
-        Each entry: ``{"term": str, "doc_count": int, "total_tf": float}``.
+        Each entry: ``{"term": str, "doc_count": int, "total_tf": float}``
+        where ``doc_count`` is the number of chunks containing the term.
         """
+        if self.backend == "fts5":
+            with self._conn() as conn:
+                rows = conn.execute(
+                    "SELECT term, doc FROM chunk_fts_row ORDER BY doc DESC, cnt DESC, term LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            out = []
+            for term, doc in rows:
+                total_tf = sum(self.get_posting_list(term).values())
+                out.append({"term": term, "doc_count": int(doc), "total_tf": round(total_tf, 4)})
+            return out
         with self._conn() as conn:
             rows = conn.execute(
                 """
@@ -295,7 +694,7 @@ class Corpus:
                        SUM(tf)                  AS total_tf
                 FROM   term_index
                 GROUP  BY term
-                ORDER  BY doc_count DESC, total_tf DESC
+                ORDER  BY doc_count DESC, total_tf DESC, term
                 LIMIT  ?
                 """,
                 (limit,),
@@ -309,23 +708,22 @@ class Corpus:
         """Return the top terms for a single document.
 
         Each entry: ``{"term": str, "chunk_count": int, "total_tf": float}``.
+        Computed from the stored chunk text, so it is backend-independent.
         """
-        with self._conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT ti.term,
-                       COUNT(*) AS chunk_count,
-                       SUM(ti.tf) AS total_tf
-                FROM   term_index ti
-                JOIN   chunks c ON ti.chunk_id = c.id
-                WHERE  c.doc_path = ?
-                GROUP  BY ti.term
-                ORDER  BY chunk_count DESC, total_tf DESC
-                LIMIT  ?
-                """,
-                (doc_path, limit),
-            ).fetchall()
+        chunk_count: dict[str, int] = {}
+        total_tf: dict[str, float] = {}
+        for chunk in self.get_chunks_for_doc(doc_path):
+            terms = tokenize(chunk.content)
+            if not terms:
+                continue
+            freq: dict[str, int] = {}
+            for t in terms:
+                freq[t] = freq.get(t, 0) + 1
+            for t, c in freq.items():
+                chunk_count[t] = chunk_count.get(t, 0) + 1
+                total_tf[t] = total_tf.get(t, 0.0) + c / len(terms)
+        ranked = sorted(chunk_count, key=lambda t: (-chunk_count[t], -total_tf[t], t))[:limit]
         return [
-            {"term": r[0], "chunk_count": r[1], "total_tf": round(r[2], 4)}
-            for r in rows
+            {"term": t, "chunk_count": chunk_count[t], "total_tf": round(total_tf[t], 4)}
+            for t in ranked
         ]

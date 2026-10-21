@@ -37,13 +37,14 @@ class LinkPopularityRetriever:
         max_count = max(popularity.values()) or 1
         scored: list[ScoredChunk] = []
 
-        for doc_path, count in sorted(popularity.items(), key=lambda x: x[1], reverse=True):
-            if count == 0:
+        ordered = [
+            (d, c) for d, c in sorted(popularity.items(), key=lambda x: (-x[1], x[0])) if c > 0
+        ][: limit * 2]
+        firsts = self.corpus.first_chunks([d for d, _ in ordered])
+        for doc_path, count in ordered:
+            c = firsts.get(doc_path)
+            if c is None:
                 continue
-            chunks = self.corpus.get_chunks_for_doc(doc_path)
-            if not chunks:
-                continue
-            c = chunks[0]
             scored.append(
                 ScoredChunk(
                     chunk_id=c.id,
@@ -62,7 +63,9 @@ class LinkPopularityRetriever:
         return dict(self._popularity())
 
     def _popularity(self) -> dict[str, int]:
-        N = self.corpus.doc_count()
+        N = getattr(self.corpus, "generation", None)
+        if N is None:
+            N = self.corpus.doc_count()
         if N != self._cache_doc_count:
             self._cache = None
             self._cache_doc_count = N
@@ -74,11 +77,10 @@ class LinkPopularityRetriever:
         walker = LinkWalker(self.corpus)
         popularity: dict[str, int] = {}
 
-        for doc_path in self.corpus.list_docs():
-            for chunk in self.corpus.get_chunks_for_doc(doc_path):
-                for link in chunk.metadata.get("links", []):
-                    for target in walker._resolve_link(link):
-                        popularity[target] = popularity.get(target, 0) + 1
+        for links in self.corpus.iter_chunk_links():
+            for link in links:
+                for target in walker._resolve_link(link):
+                    popularity[target] = popularity.get(target, 0) + 1
 
         self._cache = popularity
         logger.debug("Link popularity computed: %d docs with inbound links", len(popularity))

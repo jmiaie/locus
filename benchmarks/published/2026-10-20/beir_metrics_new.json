@@ -1,0 +1,375 @@
+{
+ "bootstrap_B": 10000,
+ "seed": 20261020,
+ "datasets": {
+  "scifact": {
+   "meta": {
+    "dataset": "scifact",
+    "n_docs": 5183,
+    "index_s": 2.9595331709715538,
+    "index_info": {
+     "files": 5183,
+     "chunks": 5332,
+     "triples": 300
+    },
+    "store_mb": 23.0078125,
+    "backend": "fts5",
+    "alphas": [
+     0.1,
+     0.25,
+     0.5,
+     1.0
+    ],
+    "depths": [
+     40,
+     100,
+     200
+    ],
+    "determinism_bm25_test_identical": 300,
+    "determinism_n": 300,
+    "maxrss_mb": 202.5703125
+   }
+  },
+  "nfcorpus": {
+   "meta": {
+    "dataset": "nfcorpus",
+    "n_docs": 3633,
+    "index_s": 2.1296271639876068,
+    "index_info": {
+     "files": 3633,
+     "chunks": 3715,
+     "triples": 230
+    },
+    "store_mb": 17.3984375,
+    "backend": "fts5",
+    "alphas": [
+     0.1,
+     0.25,
+     0.5,
+     1.0
+    ],
+    "depths": [
+     40,
+     100,
+     200
+    ],
+    "determinism_bm25_test_identical": 323,
+    "determinism_n": 323,
+    "maxrss_mb": 169.3359375
+   }
+  }
+ },
+ "dev_grid_ndcg@10": {
+  "locus_bm25": {
+   "scifact": 0.6679788607492182,
+   "nfcorpus": 0.2650243979751813
+  },
+  "rank_bm25": {
+   "scifact": 0.6672375689727884,
+   "nfcorpus": 0.26523771418569597
+  },
+  "locus_hybrid_a0.1_d40": {
+   "scifact": 0.6661212559156705,
+   "nfcorpus": 0.2650848072092784
+  },
+  "locus_hybrid_a0.1_d100": {
+   "scifact": 0.6661212559156705,
+   "nfcorpus": 0.2650848072092784
+  },
+  "locus_hybrid_a0.1_d200": {
+   "scifact": 0.6661212559156705,
+   "nfcorpus": 0.2650848072092784
+  },
+  "locus_hybrid_a0.25_d40": {
+   "scifact": 0.6617137236080358,
+   "nfcorpus": 0.26417904528485125
+  },
+  "locus_hybrid_a0.25_d100": {
+   "scifact": 0.6617137236080358,
+   "nfcorpus": 0.26445351781917464
+  },
+  "locus_hybrid_a0.25_d200": {
+   "scifact": 0.6617137236080358,
+   "nfcorpus": 0.26445351781917464
+  },
+  "locus_hybrid_a0.5_d40": {
+   "scifact": 0.6601549914119521,
+   "nfcorpus": 0.26364968467861427
+  },
+  "locus_hybrid_a0.5_d100": {
+   "scifact": 0.6578518768400234,
+   "nfcorpus": 0.2632976104179823
+  },
+  "locus_hybrid_a0.5_d200": {
+   "scifact": 0.6578518768400234,
+   "nfcorpus": 0.2632976104179823
+  },
+  "locus_hybrid_a1.0_d40": {
+   "scifact": 0.6601549914119521,
+   "nfcorpus": 0.26364968467861427
+  },
+  "locus_hybrid_a1.0_d100": {
+   "scifact": 0.6565495216241485,
+   "nfcorpus": 0.26222071545174214
+  },
+  "locus_hybrid_a1.0_d200": {
+   "scifact": 0.6553216533796099,
+   "nfcorpus": 0.26133396994904484
+  }
+ },
+ "selected_hybrid_config_by_dev": "locus_hybrid_a0.1_d100",
+ "summary": [
+  {
+   "dataset": "scifact",
+   "system": "before: locus full_6signal (main 62156b5)",
+   "n_queries": 300,
+   "ndcg@10": 0.581,
+   "ndcg@10_ci95": "[0.5375, 0.6244]",
+   "recall@10": 0.7559,
+   "recall@10_ci95": "[0.7083, 0.8024]",
+   "mrr@10": 0.5294,
+   "mrr@10_ci95": "[0.4841, 0.5750]",
+   "p50_ms": 878.04,
+   "p50_ms_ci95": "[827.55, 920.86]",
+   "p95_ms": 1511.24,
+   "p95_ms_ci95": "[1446.58, 1603.92]"
+  },
+  {
+   "dataset": "scifact",
+   "system": "before: locus bm25_only (main 62156b5)",
+   "n_queries": 300,
+   "ndcg@10": 0.6404,
+   "ndcg@10_ci95": "[0.5943, 0.6866]",
+   "recall@10": 0.7568,
+   "recall@10_ci95": "[0.7087, 0.8036]",
+   "mrr@10": 0.609,
+   "mrr@10_ci95": "[0.5608, 0.6578]",
+   "p50_ms": 204.62,
+   "p50_ms_ci95": "[177.62, 243.39]",
+   "p95_ms": 563.88,
+   "p95_ms_ci95": "[494.81, 619.16]"
+  },
+  {
+   "dataset": "scifact",
+   "system": "after: locus default (bm25, FTS5)",
+   "n_queries": 300,
+   "ndcg@10": 0.6682,
+   "ndcg@10_ci95": "[0.6225, 0.7128]",
+   "recall@10": 0.7908,
+   "recall@10_ci95": "[0.7444, 0.8348]",
+   "mrr@10": 0.6351,
+   "mrr@10_ci95": "[0.5869, 0.6828]",
+   "p50_ms": 2.7,
+   "p50_ms_ci95": "[2.54, 2.82]",
+   "p95_ms": 4.89,
+   "p95_ms_ci95": "[4.43, 5.27]"
+  },
+  {
+   "dataset": "scifact",
+   "system": "after: locus hybrid (a0.1_d100)",
+   "n_queries": 300,
+   "ndcg@10": 0.6688,
+   "ndcg@10_ci95": "[0.6238, 0.7136]",
+   "recall@10": 0.7908,
+   "recall@10_ci95": "[0.7444, 0.8348]",
+   "mrr@10": 0.6359,
+   "mrr@10_ci95": "[0.5877, 0.6837]",
+   "p50_ms": 7.74,
+   "p50_ms_ci95": "[7.44, 7.96]",
+   "p95_ms": 12.1,
+   "p95_ms_ci95": "[11.19, 12.85]"
+  },
+  {
+   "dataset": "scifact",
+   "system": "rank_bm25 (BM25Okapi baseline)",
+   "n_queries": 300,
+   "ndcg@10": 0.6637,
+   "ndcg@10_ci95": "[0.6184, 0.7086]",
+   "recall@10": 0.7898,
+   "recall@10_ci95": "[0.7438, 0.8334]",
+   "mrr@10": 0.6287,
+   "mrr@10_ci95": "[0.5801, 0.6764]",
+   "p50_ms": 7.16,
+   "p50_ms_ci95": "[6.72, 7.57]",
+   "p95_ms": 13.48,
+   "p95_ms_ci95": "[12.60, 14.34]"
+  },
+  {
+   "dataset": "nfcorpus",
+   "system": "before: locus full_6signal (main 62156b5)",
+   "n_queries": 323,
+   "ndcg@10": 0.2843,
+   "ndcg@10_ci95": "[0.2510, 0.3183]",
+   "recall@10": 0.1411,
+   "recall@10_ci95": "[0.1161, 0.1676]",
+   "mrr@10": 0.4773,
+   "mrr@10_ci95": "[0.4288, 0.5260]",
+   "p50_ms": 404.01,
+   "p50_ms_ci95": "[384.25, 421.18]",
+   "p95_ms": 817.14,
+   "p95_ms_ci95": "[742.70, 909.46]"
+  },
+  {
+   "dataset": "nfcorpus",
+   "system": "before: locus bm25_only (main 62156b5)",
+   "n_queries": 323,
+   "ndcg@10": 0.2939,
+   "ndcg@10_ci95": "[0.2597, 0.3286]",
+   "recall@10": 0.1411,
+   "recall@10_ci95": "[0.1160, 0.1679]",
+   "mrr@10": 0.4913,
+   "mrr@10_ci95": "[0.4420, 0.5402]",
+   "p50_ms": 27.16,
+   "p50_ms_ci95": "[20.98, 33.82]",
+   "p95_ms": 241.8,
+   "p95_ms_ci95": "[190.40, 272.45]"
+  },
+  {
+   "dataset": "nfcorpus",
+   "system": "after: locus default (bm25, FTS5)",
+   "n_queries": 323,
+   "ndcg@10": 0.3063,
+   "ndcg@10_ci95": "[0.2723, 0.3412]",
+   "recall@10": 0.1447,
+   "recall@10_ci95": "[0.1196, 0.1714]",
+   "mrr@10": 0.5128,
+   "mrr@10_ci95": "[0.4634, 0.5623]",
+   "p50_ms": 1.16,
+   "p50_ms_ci95": "[1.09, 1.22]",
+   "p95_ms": 2.38,
+   "p95_ms_ci95": "[2.19, 2.75]"
+  },
+  {
+   "dataset": "nfcorpus",
+   "system": "after: locus hybrid (a0.1_d100)",
+   "n_queries": 323,
+   "ndcg@10": 0.3063,
+   "ndcg@10_ci95": "[0.2722, 0.3411]",
+   "recall@10": 0.1449,
+   "recall@10_ci95": "[0.1198, 0.1716]",
+   "mrr@10": 0.5111,
+   "mrr@10_ci95": "[0.4620, 0.5605]",
+   "p50_ms": 4.58,
+   "p50_ms_ci95": "[4.30, 4.82]",
+   "p95_ms": 9.23,
+   "p95_ms_ci95": "[8.15, 9.69]"
+  },
+  {
+   "dataset": "nfcorpus",
+   "system": "rank_bm25 (BM25Okapi baseline)",
+   "n_queries": 323,
+   "ndcg@10": 0.308,
+   "ndcg@10_ci95": "[0.2740, 0.3425]",
+   "recall@10": 0.1467,
+   "recall@10_ci95": "[0.1214, 0.1737]",
+   "mrr@10": 0.5137,
+   "mrr@10_ci95": "[0.4643, 0.5631]",
+   "p50_ms": 1.57,
+   "p50_ms_ci95": "[1.47, 1.82]",
+   "p95_ms": 3.8,
+   "p95_ms_ci95": "[3.35, 4.16]"
+  }
+ ],
+ "paired": [
+  {
+   "dataset": "scifact",
+   "a": "after: locus default (bm25, FTS5)",
+   "b": "rank_bm25 (BM25Okapi baseline)",
+   "metric": "ndcg@10",
+   "mean_diff": 0.0045,
+   "ci95": "[-0.0015, 0.0111]",
+   "p_boot(diff<=0)": 0.0727,
+   "identical_rankings": 26
+  },
+  {
+   "dataset": "scifact",
+   "a": "after: locus hybrid (a0.1_d100)",
+   "b": "after: locus default (bm25, FTS5)",
+   "metric": "ndcg@10",
+   "mean_diff": 0.0007,
+   "ci95": "[-0.0056, 0.0080]",
+   "p_boot(diff<=0)": 0.4412,
+   "identical_rankings": 287
+  },
+  {
+   "dataset": "scifact",
+   "a": "after: locus hybrid (a0.1_d100)",
+   "b": "rank_bm25 (BM25Okapi baseline)",
+   "metric": "ndcg@10",
+   "mean_diff": 0.0052,
+   "ci95": "[-0.0035, 0.0146]",
+   "p_boot(diff<=0)": 0.1256,
+   "identical_rankings": 25
+  },
+  {
+   "dataset": "scifact",
+   "a": "after: locus default (bm25, FTS5)",
+   "b": "before: locus full_6signal (main 62156b5)",
+   "metric": "ndcg@10",
+   "mean_diff": 0.0872,
+   "ci95": "[0.0636, 0.1111]",
+   "p_boot(diff<=0)": 0.0,
+   "identical_rankings": 0
+  },
+  {
+   "dataset": "scifact",
+   "a": "after: locus default (bm25, FTS5)",
+   "b": "before: locus bm25_only (main 62156b5)",
+   "metric": "ndcg@10",
+   "mean_diff": 0.0278,
+   "ci95": "[0.0102, 0.0454]",
+   "p_boot(diff<=0)": 0.0008,
+   "identical_rankings": 0
+  },
+  {
+   "dataset": "nfcorpus",
+   "a": "after: locus default (bm25, FTS5)",
+   "b": "rank_bm25 (BM25Okapi baseline)",
+   "metric": "ndcg@10",
+   "mean_diff": -0.0017,
+   "ci95": "[-0.0043, 0.0009]",
+   "p_boot(diff<=0)": 0.8973,
+   "identical_rankings": 77
+  },
+  {
+   "dataset": "nfcorpus",
+   "a": "after: locus hybrid (a0.1_d100)",
+   "b": "after: locus default (bm25, FTS5)",
+   "metric": "ndcg@10",
+   "mean_diff": -0.0001,
+   "ci95": "[-0.0012, 0.0009]",
+   "p_boot(diff<=0)": 0.5417,
+   "identical_rankings": 312
+  },
+  {
+   "dataset": "nfcorpus",
+   "a": "after: locus hybrid (a0.1_d100)",
+   "b": "rank_bm25 (BM25Okapi baseline)",
+   "metric": "ndcg@10",
+   "mean_diff": -0.0018,
+   "ci95": "[-0.0046, 0.0011]",
+   "p_boot(diff<=0)": 0.8933,
+   "identical_rankings": 75
+  },
+  {
+   "dataset": "nfcorpus",
+   "a": "after: locus default (bm25, FTS5)",
+   "b": "before: locus full_6signal (main 62156b5)",
+   "metric": "ndcg@10",
+   "mean_diff": 0.022,
+   "ci95": "[0.0138, 0.0305]",
+   "p_boot(diff<=0)": 0.0,
+   "identical_rankings": 0
+  },
+  {
+   "dataset": "nfcorpus",
+   "a": "after: locus default (bm25, FTS5)",
+   "b": "before: locus bm25_only (main 62156b5)",
+   "metric": "ndcg@10",
+   "mean_diff": 0.0124,
+   "ci95": "[0.0053, 0.0197]",
+   "p_boot(diff<=0)": 0.0001,
+   "identical_rankings": 61
+  }
+ ]
+}

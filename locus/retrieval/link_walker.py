@@ -16,6 +16,27 @@ LINK_DECAY = 0.4
 class LinkWalker:
     def __init__(self, corpus: Corpus):
         self.corpus = corpus
+        self._index: dict[str, list[str]] | None = None
+        self._index_gen: int = -1
+
+    def _link_index(self) -> dict[str, list[str]]:
+        """Map normalised link targets (stem name, stem, path) -> doc paths.
+
+        Built once per corpus generation, so link resolution is O(1) instead
+        of a scan over every document per link.
+        """
+        gen = getattr(self.corpus, "generation", None)
+        if self._index is None or gen is None or gen != self._index_gen:
+            index: dict[str, list[str]] = {}
+            for doc_path in self.corpus.list_docs():  # sorted
+                dp = doc_path.lower().replace("\\", "/")
+                stem = dp[:-3] if dp.endswith(".md") else dp
+                keys = {stem.split("/")[-1], stem}
+                for key in sorted(keys):
+                    index.setdefault(key, []).append(doc_path)
+            self._index = index
+            self._index_gen = gen if gen is not None else -1
+        return self._index
 
     def walk(
         self,
@@ -59,15 +80,8 @@ class LinkWalker:
         return results
 
     def _resolve_link(self, link: str) -> list[str]:
-        """Match a link target against known corpus doc paths."""
+        """Match a link target against known corpus doc paths (sorted, unique)."""
         link_norm = link.lower().strip().replace("\\", "/")
         if link_norm.endswith(".md"):
             link_norm = link_norm[:-3]
-        candidates: list[str] = []
-        for doc_path in self.corpus.list_docs():
-            dp = doc_path.lower().replace("\\", "/")
-            stem = dp[:-3] if dp.endswith(".md") else dp
-            stem_name = stem.split("/")[-1]
-            if stem_name == link_norm or stem == link_norm or dp == link_norm + ".md":
-                candidates.append(doc_path)
-        return candidates
+        return sorted(set(self._link_index().get(link_norm, [])))

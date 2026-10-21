@@ -52,11 +52,18 @@ def _extract_tags(query: str) -> list[str]:
 
 
 def _extract_type(query: str) -> str | None:
+    """First doc type mentioned in the query (by position, then name).
+
+    Deterministic: iterating the frozenset directly made the answer depend on
+    PYTHONHASHSEED when a query named two types.
+    """
     q = query.lower()
-    for t in _DOC_TYPES:
-        if re.search(r"\b" + t + r"\b", q):
-            return t
-    return None
+    found: list[tuple[int, str]] = []
+    for t in sorted(_DOC_TYPES):
+        m = re.search(r"\b" + t + r"\b", q)
+        if m:
+            found.append((m.start(), t))
+    return min(found)[1] if found else None
 
 
 def _date_in_range(date_str: str, start: str, end: str) -> bool:
@@ -114,7 +121,7 @@ class StructuralRetriever:
             if score > 0:
                 scored.append((doc_path, score, chunks[0].id))
 
-        scored.sort(key=lambda x: x[1], reverse=True)
+        scored.sort(key=lambda x: (-x[1], x[0]))
 
         results: list[ScoredChunk] = []
         for doc_path, score, chunk_id in scored[:limit]:
@@ -129,3 +136,23 @@ class StructuralRetriever:
                     entities=chunk.metadata.get("entities", []),
                 ))
         return results
+
+
+def score_frontmatter(query: str, frontmatter: dict) -> float:
+    """Structural match score of one document's frontmatter for *query*."""
+    date_range = _extract_date_range(query)
+    query_tags = _extract_tags(query)
+    query_type = _extract_type(query)
+    if not date_range and not query_tags and not query_type:
+        return 0.0
+    fm = frontmatter or {}
+    score = 0.0
+    if date_range and _date_in_range(str(fm.get("date", "")), *date_range):
+        score += 1.0
+    if query_tags:
+        score += _tag_overlap(str(fm.get("tags", "")), query_tags)
+    if query_type:
+        doc_type = str(fm.get("type", fm.get("category", ""))).lower()
+        if doc_type and (query_type in doc_type or doc_type in query_type):
+            score += 1.0
+    return score

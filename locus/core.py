@@ -1,31 +1,42 @@
 """
 LocusEngine — main orchestrator for Locus vectorless RAG.
 
-Six-signal retrieval pipeline, no embeddings required:
-  1. BM25           — probabilistic keyword retrieval
-  2. KG             — entity expansion via temporal knowledge graph
-  3. LinkWalk       — wikilink/citation graph traversal from top BM25 hits
-  4. Structural     — frontmatter date / tag / type matching
-  5. Recency        — exponential freshness prior
-  6. LinkPopularity — inbound wikilink count
+Retrieval is two-stage, no embeddings required:
 
-Signals 1-3 are weighted by query intent (KG-first / BM25-first / balanced).
-Signals 4-6 use fixed weights (structural=1.0, recency=0.3, link_pop=0.2).
-All six are fused via weighted Reciprocal Rank Fusion.
+  Stage 1 — BM25 (SQLite FTS5 inverted index; pure-Python fallback).
+  Stage 2 — optional re-rank of the BM25 candidate pool with five signals:
+      KG             — entity expansion via the temporal knowledge graph
+      LinkWalk       — wikilink graph traversal from the top BM25 hits
+      Structural     — frontmatter date / tag / type matching
+      Recency        — frontmatter date (newest first)
+      LinkPopularity — inbound wikilink count
+    fused with the BM25 ranking by weighted Reciprocal Rank Fusion.
+
+``mode="bm25"`` (the default) returns stage 1 only.  On the public BEIR
+SciFact and NFCorpus test sets the stage-2 re-rank did not significantly
+beat BM25 (see ``benchmarks/README.md``), so it is opt-in:
+``retrieve(..., mode="hybrid")`` or ``LocusEngine(retrieval_mode="hybrid")``
+or ``LOCUS_RETRIEVAL_MODE=hybrid``.  Passing ``as_of`` without a mode
+selects ``hybrid``, because the temporal filter only acts on KG signals.
+
+Retrieval is deterministic (ties broken by chunk id / doc path) and
+read-only unless ``track=True`` is passed, which records hits in the
+hot-context bulletin and the token budget.
 """
 
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Iterator
 
-from .memory.corpus import Corpus, _EXCLUDE
+from .memory.corpus import Corpus
 from .memory.knowledge_graph import TemporalKG
 from .memory.entity_resolver import EntityResolver
 from .retrieval.bm25 import BM25Retriever, ScoredChunk
-from .retrieval.kg_retrieval import KGRetriever
+from .retrieval.kg_retrieval import KGRetriever, kg_source_scores
 from .retrieval.link_walker import LinkWalker
-from .retrieval.structural import StructuralRetriever
+from .retrieval.structural import StructuralRetriever, score_frontmatter
 from .retrieval.recency import RecencyRetriever
 from .retrieval.link_popularity import LinkPopularityRetriever
 from .retrieval.reranker import LocusReranker, RerankerWeights
@@ -54,6 +65,24 @@ _LINK_POP_WEIGHT    = 0.2
 
 _CACHE_MAX_SIZE     = 256
 
+#: Retrieval modes.  "bm25" = first stage only; "hybrid" = BM25 + re-rank.
+RETRIEVAL_MODES = ("bm25", "hybrid")
+DEFAULT_RETRIEVAL_MODE = "bm25"
+#: Stage-2 signals, in fusion order.
+RERANK_SIGNALS = ("kg", "links", "structural", "recency", "link_pop")
+#: BM25 candidates re-ranked in hybrid mode (at least ``limit``).
+#: Selected on BEIR dev splits (SciFact train, NFCorpus dev) from {40, 100, 200}.
+RERANK_DEPTH = 100
+#: Multiplier on all stage-2 signal weights relative to BM25.  Selected on the
+#: same dev splits from {0.1, 0.25, 0.5, 1.0}; larger values hurt nDCG there.
+#: Corpora rich in wikilinks/frontmatter may prefer a larger value.
+RERANK_ALPHA = 0.1
+
+
+def _default_mode() -> str:
+    env = os.environ.get("LOCUS_RETRIEVAL_MODE", "").strip().lower()
+    return env if env in RETRIEVAL_MODES else DEFAULT_RETRIEVAL_MODE
+
 
 class LocusEngine:
     """
@@ -66,14 +95,27 @@ class LocusEngine:
         context = engine.format_context(chunks)
     """
 
-    def __init__(self, store_path: str | Path = ".locus"):
+    def __init__(
+        self,
+        store_path: str | Path = ".locus",
+        retrieval_mode: str | None = None,
+        index_backend: str | None = None,
+        rerank_depth: int = RERANK_DEPTH,
+        rerank_alpha: float = RERANK_ALPHA,
+    ):
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
+        mode = retrieval_mode or _default_mode()
+        if mode not in RETRIEVAL_MODES:
+            raise ValueError(f"retrieval_mode must be one of {RETRIEVAL_MODES}, got {mode!r}")
+        self.retrieval_mode = mode
+        self.rerank_depth = int(rerank_depth)
+        self.rerank_alpha = float(rerank_alpha)
 
         # Entity resolver must be initialised before KG (transparent alias lookups)
         self.resolver = EntityResolver(self.store_path / "resolver.sqlite3")
 
-        self.corpus = Corpus(self.store_path / "corpus", section_aware=True)
+        self.corpus = Corpus(self.store_path / "corpus", section_aware=True, backend=index_backend)
         self.kg = TemporalKG(str(self.store_path / "kg.sqlite3"), resolver=self.resolver)
         self.bulletin = ContextBulletin(
             archive_path=self.store_path / "archive",
@@ -117,26 +159,26 @@ class LocusEngine:
 
     def index(self, path: str | Path, pattern: str = "**/*.md") -> dict:
         """
-        Index a file or directory.
-        Skips unchanged files (checksum dedup). Extracts KG triples from
-        wikilinks, tags, and prose sentences.
-        Returns counts of files, chunks added, and KG triples extracted.
+        Index a file or directory (incremental).
+
+        Unchanged files are skipped (checksum dedup).  For new or changed
+        files the chunks, the FTS5 postings and the KG triples extracted from
+        that file are replaced in place; facts added with ``add_fact`` are
+        never touched.  Returns counts of files, chunks added and KG triples
+        extracted in this call.
         """
         path = Path(path)
         self._fire("pre_index", path=str(path), pattern=pattern)
         if path.is_file():
             chunks = self.corpus.add_file(path)
-            triples = self.kg.populate_from_file(path)
+            triples = self.kg.replace_from_files([path]) if chunks else 0
+            self._invalidate_cache()
             result = {"files": 1, "chunks": chunks, "triples": triples}
             self._fire("post_index", result=result)
             return result
 
-        chunks = self.corpus.add_directory(path, pattern=pattern)
-        triples = 0
-        for f in path.glob(pattern):
-            if any(ex in f.parts for ex in _EXCLUDE):
-                continue
-            triples += self.kg.populate_from_file(f, base_path=path)
+        chunks, changed = self.corpus.add_directory_changed(path, pattern=pattern)
+        triples = self.kg.replace_from_files(changed, base_path=path) if changed else 0
         self._invalidate_cache()
         result = {
             "files": self.corpus.doc_count(),
@@ -147,18 +189,32 @@ class LocusEngine:
         return result
 
     def forget(self, doc_path: str) -> dict:
+        """Remove a document's chunks, postings and its auto-extracted KG triples."""
         self._fire("pre_forget", doc_path=doc_path)
         removed = self.corpus.remove_file(doc_path)
+        triples = self.kg.remove_extracted(doc_path)
         self._invalidate_cache()
-        result = {"removed_chunks": removed, "doc": doc_path}
+        result = {"removed_chunks": removed, "removed_triples": triples, "doc": doc_path}
         self._fire("post_forget", result=result)
         return result
 
     def sync(self, path: str | Path, pattern: str = "**/*.md") -> dict:
+        """Drop every indexed document and re-index *path* from scratch."""
         for doc in self.corpus.list_docs():
             self.corpus.remove_file(doc)
+            self.kg.remove_extracted(doc)
         self._invalidate_cache()
         return self.index(path, pattern=pattern)
+
+    def reindex(self, backend: str | None = None) -> dict:
+        """Rebuild the lexical index from stored chunks (no file reads).
+
+        Clean re-index / migration path, e.g. ``reindex(backend="fts5")``
+        after upgrading a store created by Locus <= 1.0.0.
+        """
+        result = self.corpus.rebuild_index(backend=backend)
+        self._invalidate_cache()
+        return result
 
     # ------------------------------------------------------------------
     # Retrieval
@@ -172,47 +228,76 @@ class LocusEngine:
         use_links: bool = True,
         intent: QueryIntent = None,
         use_cache: bool = True,
+        mode: str | None = None,
+        track: bool = False,
+        signals: tuple[str, ...] | list[str] | None = None,
     ) -> list[ScoredChunk]:
         """
-        Six-signal retrieval: BM25 + KG + link walk + structural + recency + link popularity.
+        Retrieve the top *limit* chunks for *query*.
 
-        Query intent auto-classified unless overridden:
+        mode:
+          - ``"bm25"``   — BM25 only (default; see module docstring).
+          - ``"hybrid"`` — BM25 candidate pool re-ranked with KG, link walk,
+            structural, recency and link-popularity signals via weighted RRF.
+          - ``None``     — the engine default, or ``"hybrid"`` when *as_of*
+            is given.
+
+        intent (hybrid only) is auto-classified unless overridden:
           - KG-first:   entity/factual queries (e.g. "who is Alice?")
           - BM25-first: procedural/narrative (e.g. "how does auth work?")
           - Balanced:   default
 
-        Results are cached by (query, limit, as_of, use_links, intent) and
-        invalidated automatically on index/forget/sync.
-        """
-        if intent is None:
-            intent = classify_query(query)
+        track: when True, record the returned chunks in the hot-context
+        bulletin and the token budget (the only writes retrieval performs).
 
+        signals (hybrid only): subset of ``RERANK_SIGNALS`` to use; all by default.
+
+        Results are cached in memory by all arguments that affect ranking and
+        invalidated on index/forget/sync.  Ordering is deterministic.
+        """
+        if mode is None:
+            mode = "hybrid" if as_of else self.retrieval_mode
+        if mode not in RETRIEVAL_MODES:
+            raise ValueError(f"mode must be one of {RETRIEVAL_MODES}, got {mode!r}")
+        if mode == "hybrid" and intent is None:
+            intent = classify_query(query)
+        sig = tuple(RERANK_SIGNALS if signals is None else [s for s in RERANK_SIGNALS if s in signals])
+        if not use_links:
+            sig = tuple(s for s in sig if s != "links")
+
+        key = None
+        fused: list[ScoredChunk] | None = None
         if use_cache:
-            key = self._cache_key(query, limit, as_of, use_links, intent.value)
+            key = self._cache_key(
+                query, limit, as_of, use_links, intent.value if intent else "-", mode, sig,
+            )
             if key in self._query_cache:
                 self._cache_hits += 1
-                return self._query_cache[key]
-            self._cache_misses += 1
+                fused = self._query_cache[key]
+            else:
+                self._cache_misses += 1
 
-        self._fire("pre_retrieve", query=query, limit=limit)
-        bm25_hits = self._bm25.search(query, limit=limit * 2)
-        kg_hits = self._kg_ret.search(query, limit=limit * 2, as_of=as_of)
-        link_hits = self._walker.walk(bm25_hits[:3], depth=2, limit=limit) if use_links and bm25_hits else []
-        structural_hits = self._structural.search(query, limit=limit * 2)
-        recency_hits    = self._recency.search(limit=limit * 2)
-        link_pop_hits   = self._link_pop.search(limit=limit * 2)
+        if fused is None:
+            self._fire("pre_retrieve", query=query, limit=limit)
+            if mode == "bm25":
+                fused = self._bm25.search(query, limit=limit)
+            else:
+                fused = self._hybrid(query, limit=limit, as_of=as_of, intent=intent, signals=sig)
+            if use_cache:
+                if len(self._query_cache) >= _CACHE_MAX_SIZE:
+                    oldest = next(iter(self._query_cache))
+                    del self._query_cache[oldest]
+                self._query_cache[key] = fused
+            self._fire("post_retrieve", query=query, result_count=len(fused))
 
-        intent_weights = INTENT_WEIGHTS[intent]  # [bm25, kg, link]
-        all_weights = [*intent_weights, _STRUCTURAL_WEIGHT, _RECENCY_WEIGHT, _LINK_POP_WEIGHT]
+        if track:
+            self._track(fused, label=mode)
+        return list(fused)
 
-        fused = rrf_fuse(
-            [bm25_hits, kg_hits, link_hits, structural_hits, recency_hits, link_pop_hits],
-            weights=all_weights,
-            limit=limit,
-        )
-
+    def _track(self, chunks: list[ScoredChunk], label: str = "") -> None:
+        """Record retrieved chunks in the bulletin and token budget (writes)."""
         total_tokens = 0
-        for chunk in fused:
+        for chunk in chunks:
             self.bulletin.record_hit(
                 chunk.chunk_id,
                 content=chunk.content,
@@ -221,19 +306,101 @@ class LocusEngine:
                 provenance=chunk.provenance,
             )
             total_tokens += self.budget.estimate_tokens(chunk.content)
+        if total_tokens:
+            check = self.budget.record(total_tokens)
+            if check.status.value in ("critical", "warning", "trend"):
+                logger.warning("Budget [%s]: %s", label, check.message)
 
-        check = self.budget.record(total_tokens)
-        if check.status.value in ("critical", "warning", "trend"):
-            logger.warning("Budget [%s]: %s", intent.value, check.message)
+    def _hybrid(
+        self,
+        query: str,
+        limit: int,
+        as_of: str | None,
+        intent: QueryIntent,
+        signals: tuple[str, ...] = RERANK_SIGNALS,
+    ) -> list[ScoredChunk]:
+        """BM25 candidate pool re-ranked by the stage-2 signals (read-only)."""
+        pool = self._bm25.search(query, limit=max(limit, self.rerank_depth))
+        if not pool:
+            return []
+        # Best-ranked pool chunk per document: doc-level signals vote for it.
+        doc_chunk: dict[str, ScoredChunk] = {}
+        for c in pool:
+            doc_chunk.setdefault(c.doc_path, c)
 
-        if use_cache:
-            if len(self._query_cache) >= _CACHE_MAX_SIZE:
-                oldest = next(iter(self._query_cache))
-                del self._query_cache[oldest]
-            self._query_cache[key] = fused
+        def as_signal(doc_scores: list[tuple[str, float]], provenance: str) -> list[ScoredChunk]:
+            out = []
+            for doc, score in doc_scores:
+                c = doc_chunk[doc]
+                out.append(ScoredChunk(c.chunk_id, c.doc_path, score, c.content, provenance, c.entities))
+            return out
 
-        self._fire("post_retrieve", query=query, result_count=len(fused))
-        return fused
+        lists: list[list[ScoredChunk]] = [pool]
+        iw = INTENT_WEIGHTS[intent]  # [bm25, kg, link]
+        weights: list[float] = [iw[0]]
+        a = self.rerank_alpha
+        meta: dict | None = None
+
+        def pool_meta() -> dict:
+            nonlocal meta
+            if meta is None:
+                meta = self.corpus.get_chunks_batch([c.chunk_id for c in doc_chunk.values()])
+            return meta
+
+        if "kg" in signals:
+            ks = kg_source_scores(self.kg, query, as_of=as_of)
+            ranked = sorted(((d, ks[d]) for d in doc_chunk if d in ks), key=lambda x: (-x[1], x[0]))
+            lists.append(as_signal(ranked, "kg"))
+            weights.append(a * iw[1])
+        if "links" in signals:
+            walked = self._walker.walk(pool[:3], depth=2, limit=len(doc_chunk))
+            ranked = []
+            seen: set[str] = set()
+            for w in walked:
+                if w.doc_path in doc_chunk and w.doc_path not in seen:
+                    seen.add(w.doc_path)
+                    ranked.append((w.doc_path, w.score))
+            hops = {w.doc_path: w.provenance for w in walked}
+            sig = as_signal(ranked, "link")
+            for c in sig:
+                c.provenance = hops.get(c.doc_path, "link:hop1")
+            lists.append(sig)
+            weights.append(a * iw[2])
+        if "structural" in signals:
+            m = pool_meta()
+            ranked = []
+            for doc, c in doc_chunk.items():
+                ch = m.get(c.chunk_id)
+                sc = score_frontmatter(query, ch.metadata.get("frontmatter", {}) if ch else {})
+                if sc > 0:
+                    ranked.append((doc, sc))
+            ranked.sort(key=lambda x: (-x[1], x[0]))
+            lists.append(as_signal(ranked, "structural"))
+            weights.append(a * _STRUCTURAL_WEIGHT)
+        if "recency" in signals:
+            m = pool_meta()
+            dated = []
+            for doc, c in doc_chunk.items():
+                ch = m.get(c.chunk_id)
+                d = str((ch.metadata.get("frontmatter", {}) if ch else {}).get("date", "") or "")[:10]
+                if d:
+                    dated.append((doc, d))
+            dated.sort(key=lambda x: x[0])
+            dated.sort(key=lambda x: x[1], reverse=True)  # newest first; stable -> ties by doc_path
+            n = len(dated)
+            lists.append(as_signal([(doc, 1.0 - i / max(n, 1)) for i, (doc, _) in enumerate(dated)], "recency"))
+            weights.append(a * _RECENCY_WEIGHT)
+        if "link_pop" in signals:
+            pop = self._link_pop.popularity_map()
+            mx = max(pop.values()) if pop else 1
+            ranked = sorted(
+                ((d, pop[d] / mx) for d in doc_chunk if pop.get(d, 0) > 0),
+                key=lambda x: (-x[1], x[0]),
+            )
+            lists.append(as_signal(ranked, "link_pop"))
+            weights.append(a * _LINK_POP_WEIGHT)
+
+        return rrf_fuse(lists, weights=weights, limit=limit)
 
     def stream_retrieve(
         self,
@@ -242,6 +409,7 @@ class LocusEngine:
         as_of: str = None,
         use_links: bool = True,
         config: StreamingConfig | None = None,
+        track: bool = False,
     ) -> Iterator[ScoredChunk]:
         """Yield chunks as each retrieval signal finishes.
 
@@ -253,8 +421,9 @@ class LocusEngine:
         This is not RRF fusion. Order and membership can differ from
         ``retrieve()``. :class:`StreamingRetriever` adaptive dropout can skip
         signals that would start after the time budget is inside
-        ``signal_timeout_ms``. Bulletin hits and the token budget are recorded
-        for chunks actually yielded. Results are not stored in the retrieve cache.
+        ``signal_timeout_ms``. With ``track=True`` bulletin hits and the token
+        budget are recorded for chunks actually yielded (otherwise streaming is
+        read-only). Results are not stored in the retrieve cache.
         """
         retriever = StreamingRetriever(config)
         retriever._start_time = time.perf_counter()
@@ -294,14 +463,15 @@ class LocusEngine:
                         continue
                     seen.add(chunk.chunk_id)
                     retriever.track_result(chunk, name)
-                    self.bulletin.record_hit(
-                        chunk.chunk_id,
-                        content=chunk.content,
-                        doc_path=chunk.doc_path,
-                        base_score=chunk.score,
-                        provenance=chunk.provenance,
-                    )
-                    total_tokens += self.budget.estimate_tokens(chunk.content)
+                    if track:
+                        self.bulletin.record_hit(
+                            chunk.chunk_id,
+                            content=chunk.content,
+                            doc_path=chunk.doc_path,
+                            base_score=chunk.score,
+                            provenance=chunk.provenance,
+                        )
+                        total_tokens += self.budget.estimate_tokens(chunk.content)
                     yielded += 1
                     yield chunk
         finally:
@@ -353,6 +523,8 @@ class LocusEngine:
         token_budget: int = 4000,
         rerank: bool = True,
         as_of: str = None,
+        mode: str | None = None,
+        track: bool = False,
     ) -> dict:
         """
         All-in-one context preparation for LLM agents:
@@ -362,7 +534,7 @@ class LocusEngine:
         """
         from .retrieval.kg_retrieval import extract_query_entities
 
-        chunks = self.retrieve(query, limit=limit, as_of=as_of)
+        chunks = self.retrieve(query, limit=limit, as_of=as_of, mode=mode, track=track)
         if rerank and chunks:
             chunks = self.rerank(chunks, query)
 
@@ -397,9 +569,10 @@ class LocusEngine:
     # ------------------------------------------------------------------
 
     def _cache_key(self, query: str, limit: int, as_of: str | None,
-                   use_links: bool, intent_val: str) -> str:
+                   use_links: bool, intent_val: str, mode: str = "",
+                   signals: tuple = ()) -> str:
         import hashlib
-        raw = f"{query}|{limit}|{as_of}|{use_links}|{intent_val}"
+        raw = f"{query}|{limit}|{as_of}|{use_links}|{intent_val}|{mode}|{','.join(signals)}|{self.rerank_depth}|{self.rerank_alpha}"
         return hashlib.sha256(raw.encode()).hexdigest()[:20]
 
     def _invalidate_cache(self) -> None:
@@ -791,6 +964,8 @@ class LocusEngine:
         limit: int = 5,
         as_of: str = None,
         use_links: bool = True,
+        mode: str | None = None,
+        track: bool = False,
     ) -> list[ScoredChunk]:
         """Run each query independently and fuse all result lists via RRF.
 
@@ -799,10 +974,13 @@ class LocusEngine:
         if not queries:
             return []
         all_lists = [
-            self.retrieve(q, limit=limit * 2, as_of=as_of, use_links=use_links)
+            self.retrieve(q, limit=limit * 2, as_of=as_of, use_links=use_links, mode=mode)
             for q in queries
         ]
-        return rrf_fuse(all_lists, limit=limit)
+        fused = rrf_fuse(all_lists, limit=limit)
+        if track:
+            self._track(fused, label="multi")
+        return fused
 
     def timeline(self, entity: str, as_of: str = None) -> dict:
         """Return all KG facts for *entity* sorted chronologically by valid_from.
@@ -854,6 +1032,7 @@ class LocusEngine:
     def status(self) -> dict:
         return {
             "version": __version__,
+            "retrieval_mode": self.retrieval_mode,
             "corpus": self.corpus.stats(),
             "kg": self.kg.stats(),
             "bulletin": self.bulletin.stats(),
