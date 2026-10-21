@@ -8,7 +8,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?logo=opensourceinitiative&logoColor=white)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-blue)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-280%20passing-brightgreen?logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/tests-301%20passing-brightgreen?logo=pytest&logoColor=white)](tests/)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)](pyproject.toml)
 [![MCP Compatible](https://img.shields.io/badge/MCP-compatible-blueviolet)](https://modelcontextprotocol.io)
 [![47 MCP Tools](https://img.shields.io/badge/MCP%20tools-47-blueviolet)](#mcp-tools)
@@ -43,41 +43,47 @@ Standard RAG pipelines require embedding models, vector databases, and GPU compu
 | **Knowledge graph** | Not supported | **Auto-extracted from prose** |
 | **Contradiction detection** | Not supported | **Built in** |
 | **Multi-node** | Requires external infrastructure | **Built-in cluster** |
-| **Deterministic results** | No (model-dependent) | **Yes** |
+| **Deterministic results** | No (model-dependent) | **Yes** — ties broken by index order, no hash-order dependence, retrieval never writes |
 
 ---
 
-## Six Retrieval Signals
+## Retrieval Pipeline
 
-Locus fuses six independent signals via **Reciprocal Rank Fusion**. Query intent is auto-classified and adjusts signal weights per query.
+Locus retrieves in two stages. Stage 1 is always BM25 over a **SQLite FTS5** inverted index
+(stdlib `sqlite3`, no extra packages). Stage 2 is an **optional** re-rank of the BM25 candidates
+with five graph/metadata signals, fused with weighted Reciprocal Rank Fusion.
 
 ```
-                        ┌───────────────────────────────────────────┐
-  Query ──────────────► │  1. BM25          keyword ranking (BM25+) │
-                        │  2. KG            entity expansion + hops  │
-  Intent classifier     │  3. Link Walk     wikilink graph traversal  │
-  ┌────────────────┐    │  4. Structural    date / tag / type match   │
-  │ kg_first       │    │  5. Recency       freshness decay prior     │
-  │ bm25_first     │    │  6. Link Popularity hub docs (inbound links)│
-  │ balanced       │    └──────────────────────┬────────────────────┘
-  └────────────────┘                           │
-                                   Weighted RRF Fusion
-                                               │
-                              ┌────────────────▼──────────────────┐
-                              │  Ranked chunks + provenance tags  │
-                              │  bm25 · kg · link:hop1 · structural│
-                              │  recency · link_pop               │
-                              └───────────────────────────────────┘
+  Query ──► Stage 1: BM25 (SQLite FTS5)  ──► top-k chunks          mode="bm25"  (default)
+                     │
+                     └─► candidate pool (rerank_depth=100)
+                           ├─ KG            entity expansion + one hop (honours as_of)
+                           ├─ Link Walk     wikilinks from the top BM25 hits
+                           ├─ Structural    frontmatter date / tag / type
+                           ├─ Recency       frontmatter date, newest first
+                           └─ Link Popularity  inbound wikilinks
+                         weighted RRF (intent-aware, rerank_alpha=0.1) ─► top-k   mode="hybrid"
 ```
 
-| Signal | Weight | What it captures |
+**Why BM25 is the default:** on the public BEIR SciFact and NFCorpus test sets the hybrid re-rank
+did **not** beat plain BM25 (paired bootstrap, see [Benchmark Results](#benchmark-results)), and every
+larger re-rank weight we tried on the dev splits made nDCG@10 worse. The re-rank stays available for
+link- and frontmatter-rich vaults: `engine.retrieve(q, mode="hybrid")`,
+`LocusEngine(retrieval_mode="hybrid")`, `LOCUS_RETRIEVAL_MODE=hybrid`, `locus retrieve --mode hybrid`,
+or `mode` on the `locus_retrieve` MCP tool. Passing `as_of` selects hybrid, since the temporal filter
+acts on KG facts.
+
+| Stage-2 signal | Weight (× `rerank_alpha`) | What it captures |
 |:---|:---|:---|
-| BM25 | intent-weighted | Keyword frequency and term importance |
-| KG Entity | intent-weighted | Entities from query linked to documents |
-| Link Walk | intent-weighted | Documents reachable via wikilinks from top hits |
+| KG Entity | intent-weighted | Entities from the query linked to documents |
+| Link Walk | intent-weighted | Candidates reachable via wikilinks from the top hits |
 | Structural | 1.0 | Frontmatter date ranges, tags, doc types |
-| Recency | 0.3 | Freshness prior (half-life: 30 days) |
+| Recency | 0.3 | Newer frontmatter `date` first |
 | Link Popularity | 0.2 | Hub documents cited by many others |
+
+Retrieval is **read-only**: it never writes to the store unless you pass `track=True`, which records
+hits in the hot-context bulletin and token budget (the `locus_retrieve` MCP tool does this by default
+so `locus_hot_context` keeps working; pass `track: false` for a pure read).
 
 ---
 
@@ -95,10 +101,13 @@ locus index ./my-docs
 
 # Retrieve — every result includes a provenance tag
 locus retrieve "how does authentication work?"
-# [1] auth/jwt.md  score=0.0421  via=bm25
+# [1] auth/jwt.md  score=7.4121  via=bm25
 #     JWT tokens are validated on every request. The token is...
-# [2] auth/oauth.md  score=0.0318  via=kg
+# [2] auth/oauth.md  score=5.0318  via=bm25
 #     OAuth 2.0 flow for third-party integrations...
+
+# Optional graph/metadata re-rank of the BM25 candidates
+locus retrieve "who owns the auth service?" --mode hybrid
 
 # Explain why a specific result was returned
 locus explain <chunk_id> --query "authentication"
@@ -183,7 +192,7 @@ Locus is three layers — memory, retrieval, and interface — with no layer dep
 │  TokenBudget  ·  LocusCluster (multi-node)                       │
 ├─────────────────────────────────────────────────────────────────┤
 │  Memory Layer                                                     │
-│  Corpus         BM25 inverted index, checksum dedup, SQLite      │
+│  Corpus         SQLite FTS5 BM25 index, checksum dedup, SQLite   │
 │  TemporalKG     Triples + validity windows, traversal, match     │
 │  EntityResolver Alias table → canonical entity names            │
 │  Chunker        Section-aware (heading boundaries) + word-count  │
@@ -197,10 +206,13 @@ All storage is SQLite — no external databases, no servers, no configuration.
 ## Features
 
 ### Retrieval
-- Six-signal pipeline fused via weighted Reciprocal Rank Fusion
+- **BM25 on SQLite FTS5** — inverted index, so query cost tracks the matching postings, not the corpus size (100k docs: ~93 ms p50 vs ~19 s before); pure-Python fallback when FTS5 is not compiled in
+- **Optional hybrid re-rank** — KG, link walk, structural, recency and link popularity over the BM25 candidates, fused via weighted RRF (`mode="hybrid"`)
+- **Incremental indexing** — changed files replace their chunks, postings and auto-extracted KG triples in place; `forget` removes them; `add_fact` facts are never touched
+- **Deterministic, read-only retrieval** — ties broken by index order; nothing is written unless `track=True`
 - **Section-aware chunking** — splits at `#` heading boundaries; long sections fall back to word-count
 - **Temporal retrieval** — `as_of="2024-01-01"` returns only facts valid on that date
-- **Query intent routing** — auto-classifies `kg_first` / `bm25_first` / `balanced` and shifts weights
+- **Query intent routing** (hybrid) — auto-classifies `kg_first` / `bm25_first` / `balanced` and shifts re-rank weights
 - **Checksum dedup** — unchanged files never re-indexed; safe to run `index` on every startup
 
 ### Knowledge Graph
@@ -253,7 +265,7 @@ This is structurally impossible with vector search. No cosine score has a "why."
 | Tool | Description |
 |:---|:---|
 | `locus_index` | Index a file or directory; skips unchanged files |
-| `locus_retrieve` | Six-signal retrieval — returns chunks with provenance tags |
+| `locus_retrieve` | BM25 retrieval (FTS5) with optional hybrid re-rank — returns chunks with provenance tags |
 | `locus_explain` | Explain *why* a chunk was retrieved for a query |
 | `locus_add_fact` | Add a temporal KG triple (subject–predicate–object) |
 | `locus_query_entity` | Query all KG facts about an entity; supports `as_of` |
@@ -324,7 +336,7 @@ locus [--store PATH] COMMAND [args]
 | Command | Description |
 |:---|:---|
 | `index <path>` | Index files; `--pattern **/*.md` |
-| `retrieve <query>` | Retrieve; `--limit 5 --as-of 2024-01-01 --raw` |
+| `retrieve <query>` | Retrieve; `--limit 5 --mode bm25\|hybrid --as-of 2024-01-01 --track --raw` |
 | `explain <chunk_id>` | Explain retrieval; `--query "..."` |
 | `status` | Corpus + KG + bulletin + budget stats |
 | `session-start` | Warm context open |
@@ -337,6 +349,7 @@ locus [--store PATH] COMMAND [args]
 | `kg-match` | Pattern match; `--subject --predicate --obj --as-of` |
 | `forget <doc_path>` | Remove document from corpus |
 | `sync <path>` | Full reindex |
+| `reindex` | Rebuild the search index from stored chunks; `--backend fts5\|legacy` |
 | `watch <path>` | Auto-reindex on changes; `--interval 5` |
 | `mcp` | Start MCP stdio server |
 | `serve` | Start HTTP JSON-RPC server; `--host 127.0.0.1 --port 7391 --token --cors-origin` |
@@ -426,33 +439,54 @@ Result: 5 pass  1 warn  0 fail
 
 ## Benchmark Results
 
-Published numbers from the **Engineering Wiki** corpus (interconnected docs with entities, wikilinks, frontmatter). Full methodology and the weaker synthetic baseline live in [`benchmarks/README.md`](benchmarks/README.md). Re-run with:
+Every number below is reproducible with the scripts in [`benchmarks/repro/`](benchmarks/repro/);
+methodology, data sources and caveats are in [`benchmarks/README.md`](benchmarks/README.md).
+Measured 2026-10-20 on a shared 8-vCPU / 16 GB Linux VM (Python 3.13, SQLite 3.46.1) — treat latencies as
+indicative. 95% CIs are seeded bootstrap (B = 10,000) over queries.
 
-```bash
-python benchmarks/run.py --no-latency        # engineering wiki (default)
-pip install rank_bm25                        # optional naive BM25 baseline
-python benchmarks/run.py
-```
+### Public datasets — BEIR test splits, nDCG@10
 
-### Signal ablation (Engineering Wiki)
-
-| Config | R@1 | R@3 | R@5 | MRR | ms/q |
-|---|---|---|---|---|---|
-| bm25_only | 0.336 | 0.850 | 0.982 | 0.569 | 11 |
-| bm25_kg | 0.248 | 0.841 | 0.956 | 0.513 | 14 |
-| full_6signal | **0.451** | 0.779 | 0.947 | **0.633** | 61 |
-
-Full six-signal fusion lifts R@1 and MRR vs BM25-only on an interconnected corpus. On the templated *synthetic* corpus (worst case for graph signals), BM25-only matches the full pipeline — see benchmarks README for honest interpretation.
-
-### Baseline comparison (Engineering Wiki)
-
-| System | R@5 | MRR | ms/q |
+| System | SciFact (300 q) | NFCorpus (323 q) | p50 latency (SciFact / NFCorpus) |
 |---|---|---|---|
-| locus_6signal | 0.947 | **0.633** | 106 |
-| rank_bm25 (naive BM25) | 1.000 | 0.760 | 0.1 |
-| grep_literal | 1.000 | 0.729 | 0.1 |
+| **Locus default (`mode="bm25"`, FTS5)** | **0.668** [0.623, 0.713] | **0.306** [0.272, 0.341] | 2.7 ms / 1.2 ms |
+| Locus hybrid (`mode="hybrid"`) | 0.669 [0.624, 0.714] | 0.306 [0.272, 0.341] | 7.7 ms / 4.6 ms |
+| `rank_bm25` BM25Okapi (same tokenizer) | 0.664 [0.618, 0.709] | 0.308 [0.274, 0.343] | 7.2 ms / 1.6 ms |
+| *Locus 1.0.0 six-signal pipeline (before)* | *0.581* [0.538, 0.624] | *0.284* [0.251, 0.318] | *878 ms / 404 ms* |
 
-> **Note:** `rank_bm25` / `grep` win raw keyword recall on this typed-term-heavy wiki; Locus trades a few points of pure keyword MRR for **provenance, temporal KG, link expansion, and zero infra**. A tiny embedding / vector baseline is **not yet published** here — run `benchmarks/run.py` and open an issue/PR with numbers if you add one.
+- **Parity with `rank_bm25`:** paired difference +0.0045 [−0.0015, +0.0111] on SciFact and −0.0017 [−0.0043, +0.0009] on NFCorpus — not significant either way.
+- **Hybrid vs BM25:** +0.0007 [−0.0056, +0.0080] (SciFact) and −0.0001 [−0.0012, +0.0009] (NFCorpus) — no significant gain, so BM25 is the default.
+  The re-rank weight and depth were chosen on the dev splits only (SciFact train, NFCorpus dev); no larger weight helped there.
+- **vs Locus 1.0.0:** +0.0872 [+0.0636, +0.1111] (SciFact) and +0.0220 [+0.0138, +0.0305] (NFCorpus) nDCG@10 over the old six-signal default; +0.0278 / +0.0124 over the old BM25-only path (both significant).
+- **Monte Carlo, 10 random 2,000-doc SciFact sub-corpora:** mean nDCG@10 BM25 0.742 · `rank_bm25` 0.742 · hybrid 0.736 (hybrid lower in 8 of 10 seeds).
+
+### Scaling — synthetic corpus (Zipf vocabulary, known-item queries, 100 queries)
+
+| Docs | Index build | Store size | Query p50 / p95 (default) | Before (1.0.0): build · size · p50 |
+|---|---|---|---|---|
+| 1,000 | 0.24 s | 4.4 MB | 1.5 ms / 2.2 ms | 6.0 s · 13 MB · 207 ms |
+| 10,000 | 2.5 s | 43 MB | 10.5 ms / 16.3 ms | 85 s · 130 MB · 1.36 s |
+| 100,000 | 34 s | 419 MB | 93 ms / 137 ms | 21.7 min · 1,324 MB · 19.0 s |
+
+Query cost grows with the size of the matching posting lists: the synthetic queries include very common
+words, so FTS5 still scores most of the corpus. p95 at 100k is above 100 ms on this machine.
+
+### Determinism and the old wiki claims
+
+The 1.0.0 README reported R@5 0.947 / MRR 0.633 for the six-signal pipeline on the bundled Engineering
+Wiki benchmark. That did not reproduce (0.867 / 0.594), and the simple-100 benchmark gave three different
+answers across five runs. With this release both benchmarks give identical results in 5 of 5 fresh
+processes with different `PYTHONHASHSEED` values:
+
+| Benchmark (`benchmarks/run.py`) | System | R@5 | MRR |
+|---|---|---|---|
+| Engineering Wiki (113 queries, synthetic) | Locus default (BM25) | 1.000 | 0.727 |
+| | Locus hybrid | 1.000 | 0.743 |
+| | `rank_bm25` | 1.000 | 0.760 |
+| simple-100 (synthetic) | Locus default / hybrid | 0.600 | 0.274 |
+| | `rank_bm25` | 0.590 | 0.271 |
+
+These two corpora are generated by Locus's own code and are small, so treat them as smoke tests rather than evidence;
+the BEIR numbers above are the ones to quote.
 
 ## Benchmarking
 
@@ -508,6 +542,8 @@ pip install locus-rag          # macOS / Linux: python3 -m pip install locus-rag
 ```
 
 Locus is also described for the MCP registry in [`server.json`](server.json) (`uvx locus-rag mcp --store PATH`).
+The `locus-rag` console script that command needs is not in the 1.0.0 wheel on PyPI; until the next release,
+run `uvx --from locus-rag locus mcp` instead (verified against 1.0.0).
 
 **Zero runtime dependencies.** Locus uses only Python stdlib: `sqlite3`, `re`, `pathlib`, `threading`, `http.server`, `hashlib`, `math`, `json`.
 

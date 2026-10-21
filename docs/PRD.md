@@ -53,12 +53,12 @@ data in the repository.
 | Temporal KG | Triples with `valid_from` / `valid_to`, `as_of` queries, contradiction detection, aliases | `locus/memory/knowledge_graph.py` |
 | MCP | 47 tools (`locus/mcp/tools.py`), 4 prompts, `locus://doc/` resources; stdio and HTTP JSON-RPC | `locus/mcp/` |
 | OMPA bridge | Indexes vault markdown and copies `.palace/knowledge_graph.sqlite3` triples into the Locus KG | `locus/bridge/ompa.py` |
-| Benchmarks | Synthetic corpora only (Engineering Wiki and a simpler generator); optional `rank_bm25` and grep baselines | `locus/bench/`, `benchmarks/` |
-| Tests | 280 tests, CI on Python 3.11 to 3.13 | `tests/`, `.github/workflows/ci.yml` |
+| Benchmarks | BEIR SciFact/NFCorpus (nDCG@10 with CIs vs `rank_bm25`), synthetic scaling to 100k docs, Engineering Wiki and simple synthetic corpora | `locus/bench/`, `benchmarks/` |
+| Tests | 301 tests, CI on Python 3.11 to 3.13 | `tests/`, `.github/workflows/ci.yml` |
 
-Published numbers in `benchmarks/README.md` are on **synthetic** data. On the Engineering Wiki corpus,
-`rank_bm25` scores higher MRR (0.760) than the full Locus pipeline (0.633); the README says so. There is no
-public-dataset result and no embedding baseline yet.
+`benchmarks/README.md` (2026-10-20) reports BEIR results: the default BM25 (SQLite FTS5) mode is at parity
+with `rank_bm25` (SciFact nDCG@10 0.668 vs 0.664, NFCorpus 0.306 vs 0.308), and the optional hybrid
+re-rank is not significantly better than BM25, so it is opt-in. There is no embedding baseline yet.
 
 ## 5. Role in the bundle
 

@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed — retrieval engine (FTS5 + honest benchmarks)
+- **SQLite FTS5 index is the default backend.** BM25 (k1=1.2, b=0.75) is scored inside SQLite with `bm25()`; no new dependencies. If the interpreter's SQLite lacks FTS5, Locus falls back to the pure-Python `legacy` backend, which uses the same formula and gives identical rankings. Choose explicitly with `LocusEngine(index_backend=...)` or `LOCUS_INDEX_BACKEND=fts5|legacy`.
+- **Stores migrate automatically.** A 1.0.0 store is rebuilt into FTS5 on first open (`meta.schema_version = 2`) and the old `term_index` is cleared. New `locus reindex [--backend fts5|legacy]` / `LocusEngine.reindex()` rebuilds or switches backends. Migration is one-way: to go back to 1.0.0, index into a fresh store (1.0.0 sees an empty term index in a migrated store).
+- **BM25 is the default retrieval mode.** The KG, link-walk, structural, recency and link-popularity signals are now an optional re-rank of the top `rerank_depth` (default 100) BM25 hits with weight `rerank_alpha` (default 0.1): `retrieve(mode="hybrid")`, `LocusEngine(retrieval_mode="hybrid")`, `LOCUS_RETRIEVAL_MODE=hybrid`, `locus retrieve --mode hybrid`, or `mode` on the `locus_retrieve` MCP tool. `as_of=` implies hybrid. Defaults were chosen on BEIR dev splits; on the test splits hybrid was not significantly better than BM25 (paired bootstrap), so it is opt-in.
+- **Reads don't write.** `retrieve()` / `stream_retrieve()` no longer post to the bulletin or update the budget unless `track=True`. The `locus_retrieve` MCP tool keeps `track=True` by default; pass `track=false` for read-only calls.
+- **Deterministic results.** Ties are broken by index order, file globs are sorted, KG queries have `ORDER BY`, query-type detection no longer depends on `PYTHONHASHSEED`, and RRF ties break on chunk id. Repeated runs in fresh processes return identical rankings.
+- **Incremental indexing is cheaper.** Only changed files are re-extracted into the KG; their old auto-extracted triples are replaced instead of duplicated, and manual facts are kept. `forget()` also removes the document's extracted triples (`removed_triples` in the result). Duplicate chunk ids within a file keep the last occurrence. KG triples from 1.0.0 stores are treated as manual, so re-indexing a changed file may duplicate them once; indexing into a fresh store gives a clean graph.
+- **Faster at scale (shared 8-vCPU VM).** 100k synthetic docs: index build 21.7 min → 34 s, store 1,324 → 419 MB, BM25 p50 19.0 s → 93 ms. BEIR SciFact p50 878 ms → 2.7 ms.
+- **Ablation configs renamed** to match the new pipeline: `full_6signal` → `hybrid_all`, `full_reranked` → `hybrid_reranked`; the baseline runner reports `locus_bm25` and `locus_hybrid`. `locus.bench.beir` scores both modes.
+
+### Fixed — benchmark claims
+- **Removed unreproduced numbers.** The README's Engineering Wiki claim (six-signal R@5 0.947 / MRR 0.633) reproduced at 0.867 / 0.594 on 1.0.0 and has been replaced with BEIR SciFact/NFCorpus nDCG@10 with 95% CIs against `rank_bm25`, scaling to 100k docs, and a 5-run determinism check. Locus BM25 is at parity with `rank_bm25` (SciFact 0.668 vs 0.664, NFCorpus 0.306 vs 0.308; differences not significant) and beats the 1.0.0 default by +0.087 / +0.022.
+- **`benchmarks/README.md`** documents datasets, protocol and the exact commands; scripts are in `benchmarks/repro/`, summaries in `benchmarks/published/2026-10-20/`.
+- **uvx note.** The published 1.0.0 wheel has no `locus-rag` script, so the README shows `uvx --from locus-rag locus mcp` until the next release; `server.json` already targets that release.
+
 ### Security
 - **HTTP server binds `127.0.0.1` by default** (was `0.0.0.0`). Binding any non-loopback host now requires `--token`; `serve()` / `make_server()` raise `ValueError` otherwise. Token comparison is constant-time. `/tools` now requires the token when one is set.
 - **DNS-rebinding guard.** Without a token, the HTTP server only serves requests whose `Host` header is loopback, and any browser `Origin` must be loopback or the `--cors-origin` value (403 otherwise). This stops a page on an attacker hostname that re-resolves to 127.0.0.1 from calling tools such as `locus_index` / `locus_export_kg`.

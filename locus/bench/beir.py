@@ -146,7 +146,9 @@ def _file_name(doc_id: str) -> str:
     return f"{safe}-{hashlib.sha1(doc_id.encode()).hexdigest()[:8]}.md"
 
 
-def run_locus(dataset: BeirDataset, store_dir: str | Path, limit: int = 100) -> BeirResult:
+def run_locus(
+    dataset: BeirDataset, store_dir: str | Path, limit: int = 100, mode: str = "bm25",
+) -> BeirResult:
     """Index the corpus as one markdown file per document and score Locus."""
     from ..core import LocusEngine
 
@@ -164,13 +166,16 @@ def run_locus(dataset: BeirDataset, store_dir: str | Path, limit: int = 100) -> 
 
     def retrieve(query: str) -> list[str]:
         seen: list[str] = []
-        for chunk in engine.retrieve(query, limit=limit, use_cache=False):
+        for chunk in engine.retrieve(query, limit=limit, use_cache=False, mode=mode):
             doc_id = name_to_id.get(Path(chunk.doc_path).name)
             if doc_id and doc_id not in seen:
                 seen.append(doc_id)
         return seen
 
-    return score_run("locus", dataset, retrieve, notes="LocusEngine.retrieve (all signals)")
+    return score_run(
+        f"locus_{mode}", dataset, retrieve,
+        notes=f"LocusEngine.retrieve(mode={mode!r})",
+    )
 
 
 def run_rank_bm25(dataset: BeirDataset, limit: int = 100) -> BeirResult:
@@ -184,7 +189,7 @@ def run_rank_bm25(dataset: BeirDataset, limit: int = 100) -> BeirResult:
 
     def retrieve(query: str) -> list[str]:
         scores = bm25.get_scores(BaselineBench._tokenize(query))
-        top = sorted(range(len(ids)), key=lambda i: -scores[i])[:limit]
+        top = sorted(range(len(ids)), key=lambda i: (-scores[i], i))[:limit]
         return [ids[i] for i in top]
 
     return score_run("rank_bm25", dataset, retrieve, notes="BM25Okapi k1=1.5 b=0.75")
@@ -208,7 +213,9 @@ def main(argv: list[str] | None = None) -> None:
     dataset = load_beir(args.dataset_dir, split=args.split, max_queries=args.max_queries)
     results: list[dict] = []
     with tempfile.TemporaryDirectory() as tmp:
-        results.append(run_locus(dataset, tmp).to_dict())
+        results.append(run_locus(dataset, tmp, mode="bm25").to_dict())
+    with tempfile.TemporaryDirectory() as tmp:
+        results.append(run_locus(dataset, tmp, mode="hybrid").to_dict())
     try:
         results.append(run_rank_bm25(dataset).to_dict())
     except ImportError:

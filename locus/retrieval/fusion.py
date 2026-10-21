@@ -41,5 +41,6 @@ def rrf_fuse(
             if cid not in best or chunk.score > best[cid].score:
                 best[cid] = chunk
 
-    fused = sorted(rrf.items(), key=lambda x: x[1], reverse=True)[:limit]
+    # Ties broken by chunk_id so the order never depends on input/hash order.
+    fused = sorted(rrf.items(), key=lambda x: (-x[1], x[0]))[:limit]
     return [best[cid] for cid, _ in fused if cid in best]

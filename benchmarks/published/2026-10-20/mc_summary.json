@@ -1,0 +1,33 @@
+{
+ "locus_bm25": {
+  "mean": 0.7418,
+  "min": 0.7066,
+  "max": 0.8234
+ },
+ "locus_hybrid": {
+  "mean": 0.7363,
+  "min": 0.7005,
+  "max": 0.8234
+ },
+ "rank_bm25": {
+  "mean": 0.742,
+  "min": 0.7035,
+  "max": 0.8265
+ },
+ "bm25_minus_rank_bm25": {
+  "mean": -0.0002,
+  "seeds_bm25_higher": 4,
+  "seeds_lower": 6
+ },
+ "hybrid_minus_bm25": {
+  "mean": -0.0056,
+  "seeds_hybrid_higher": 1,
+  "seeds_equal": 1,
+  "seeds_lower": 8
+ },
+ "before": {
+  "locus_bm25_only": 0.721,
+  "locus_full_6signal": 0.628,
+  "rank_bm25": 0.742
+ }
+}

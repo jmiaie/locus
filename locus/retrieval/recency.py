@@ -30,12 +30,13 @@ class RecencyRetriever:
         now = datetime.now(timezone.utc)
         scored: list[ScoredChunk] = []
 
-        for doc_path, indexed_at in self._doc_dates():
+        dates = self._doc_dates()
+        firsts = self.corpus.first_chunks([d for d, _ in dates])
+        for doc_path, indexed_at in dates:
             score = self._score(indexed_at, now)
-            chunks = self.corpus.get_chunks_for_doc(doc_path)
-            if not chunks:
+            c = firsts.get(doc_path)
+            if c is None:
                 continue
-            c = chunks[0]
             scored.append(ScoredChunk(
                 chunk_id=c.id,
                 doc_path=c.doc_path,
@@ -45,7 +46,7 @@ class RecencyRetriever:
                 entities=c.metadata.get("entities", []),
             ))
 
-        scored.sort(key=lambda x: x.score, reverse=True)
+        scored.sort(key=lambda x: (-x.score, x.doc_path))
         return scored[:limit]
 
     def _score(self, indexed_at: str | None, now: datetime) -> float:
@@ -63,6 +64,6 @@ class RecencyRetriever:
     def _doc_dates(self) -> list[tuple[str, str | None]]:
         with sqlite3.connect(self.corpus.db_path) as conn:
             rows = conn.execute(
-                "SELECT doc_path, indexed_at FROM doc_stats"
+                "SELECT doc_path, indexed_at FROM doc_stats ORDER BY doc_path"
             ).fetchall()
         return [(r[0], r[1]) for r in rows]

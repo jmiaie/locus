@@ -28,7 +28,14 @@ def main() -> None:
     p_ret.add_argument("--limit", type=int, default=5)
     p_ret.add_argument("--as-of", dest="as_of", default=None)
     p_ret.add_argument("--no-links", action="store_true")
+    p_ret.add_argument("--mode", choices=["bm25", "hybrid"], default=None,
+                       help="bm25 (default) or hybrid re-rank")
+    p_ret.add_argument("--track", action="store_true",
+                       help="Record hits in the hot-context bulletin")
     p_ret.add_argument("--raw", action="store_true", help="Output JSON")
+
+    p_reindex = sub.add_parser("reindex", help="Rebuild the lexical index from stored chunks")
+    p_reindex.add_argument("--backend", choices=["fts5", "legacy"], default=None)
 
     p_explain = sub.add_parser("explain", help="Explain why a chunk was retrieved")
     p_explain.add_argument("chunk_id")
@@ -250,12 +257,17 @@ def main() -> None:
     if args.cmd == "index":
         print(json.dumps(engine.index(args.path, pattern=args.pattern), indent=2))
 
+    elif args.cmd == "reindex":
+        print(json.dumps(engine.reindex(backend=args.backend), indent=2))
+
     elif args.cmd == "retrieve":
         chunks = engine.retrieve(
             query=args.query,
             limit=args.limit,
             as_of=args.as_of,
             use_links=not args.no_links,
+            mode=args.mode,
+            track=args.track,
         )
         if args.raw:
             print(json.dumps([

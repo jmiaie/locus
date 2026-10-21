@@ -2,13 +2,14 @@
 Signal ablation benchmark — measures the retrieval quality contribution
 of each signal added to the pipeline.
 
-Configurations tested (cumulative):
-  1. bm25_only        — BM25 alone
-  2. bm25_kg          — BM25 + KG entity expansion
+Configurations tested (cumulative).  Stage 1 is always BM25; the other
+signals re-rank the BM25 candidate pool (``LocusEngine.retrieve(mode="hybrid")``):
+  1. bm25_only        — BM25 alone (the default retrieval mode)
+  2. bm25_kg          — + KG entity expansion
   3. bm25_kg_links    — + link walking
-  4. bm25_kg_links_sf — + structural + recency (all intent signals)
-  5. full_6signal     — + link popularity (complete pipeline)
-  6. full_reranked    — full pipeline + heuristic re-ranker
+  4. bm25_kg_links_sf — + structural + recency
+  5. hybrid_all       — + link popularity (all re-rank signals)
+  6. hybrid_reranked  — hybrid_all + heuristic re-ranker
 """
 
 from __future__ import annotations
@@ -21,8 +22,6 @@ if TYPE_CHECKING:
     from ..core import LocusEngine
     from .synthetic import QAPair
 
-from ..retrieval.fusion import rrf_fuse
-from ..retrieval.classifier import classify_query, INTENT_WEIGHTS
 
 
 _CONFIGURATIONS: list[tuple[str, list[str]]] = [
@@ -30,8 +29,8 @@ _CONFIGURATIONS: list[tuple[str, list[str]]] = [
     ("bm25_kg",          ["bm25", "kg"]),
     ("bm25_kg_links",    ["bm25", "kg", "links"]),
     ("bm25_kg_links_sf", ["bm25", "kg", "links", "structural", "recency"]),
-    ("full_6signal",     ["bm25", "kg", "links", "structural", "recency", "link_pop"]),
-    ("full_reranked",    ["bm25", "kg", "links", "structural", "recency", "link_pop", "rerank"]),
+    ("hybrid_all",       ["bm25", "kg", "links", "structural", "recency", "link_pop"]),
+    ("hybrid_reranked",  ["bm25", "kg", "links", "structural", "recency", "link_pop", "rerank"]),
 ]
 
 
@@ -154,45 +153,9 @@ class AblationBench:
 
     @staticmethod
     def _retrieve(engine: "LocusEngine", query: str, signals: list[str], limit: int):
-        intent = classify_query(query)
-        iw = INTENT_WEIGHTS[intent]  # [bm25, kg, link]
-
-        lists = []
-        weights = []
-
-        if "bm25" in signals:
-            hits = engine._bm25.search(query, limit=limit * 2)
-            lists.append(hits)
-            weights.append(iw[0])
-
-        if "kg" in signals:
-            hits = engine._kg_ret.search(query, limit=limit * 2)
-            lists.append(hits)
-            weights.append(iw[1])
-
-        if "links" in signals:
-            bm25_top = engine._bm25.search(query, limit=3)
-            if bm25_top:
-                hits = engine._walker.walk(bm25_top, depth=2, limit=limit)
-                lists.append(hits)
-                weights.append(iw[2])
-
-        if "structural" in signals:
-            hits = engine._structural.search(query, limit=limit * 2)
-            lists.append(hits)
-            weights.append(1.0)
-
-        if "recency" in signals:
-            hits = engine._recency.search(limit=limit * 2)
-            lists.append(hits)
-            weights.append(0.3)
-
-        if "link_pop" in signals:
-            hits = engine._link_pop.search(limit=limit * 2)
-            lists.append(hits)
-            weights.append(0.2)
-
-        if not lists:
-            return []
-
-        return rrf_fuse(lists, weights=weights, limit=limit)
+        rerank_signals = [s for s in signals if s != "bm25"]
+        if not rerank_signals:
+            return engine.retrieve(query, limit=limit, mode="bm25", use_cache=False)
+        return engine.retrieve(
+            query, limit=limit, mode="hybrid", signals=rerank_signals, use_cache=False,
+        )

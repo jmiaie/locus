@@ -24,7 +24,7 @@ Phases are relative to the merge of this PR. Dates are not commitments.
 | ID | Deliverable | Exit criteria | Depends on |
 |---|---|---|---|
 | N1 | BEIR loader and metrics (`locus/bench/beir.py`) | **Scaffolded in this PR**: loads local `corpus.jsonl` / `queries.jsonl` / `qrels/<split>.tsv`, scores nDCG@10, Recall@k, MRR; tests on a fixture | — |
-| N2 | Locus and `rank_bm25` runs on SciFact and NFCorpus | **Code in this PR**; open: results JSON (with dataset SHA-256s, versions, machine) committed under `benchmarks/results/`, table in `benchmarks/README.md` including losses | N1, dataset copied locally by the owner |
+| N2 | Locus and `rank_bm25` runs on SciFact and NFCorpus | **Done (2026-10-20):** tables with CIs in `benchmarks/README.md`, summaries in `benchmarks/published/2026-10-20/`, scripts in `benchmarks/repro/`; open: dataset SHA-256s | N1, dataset copied locally by the owner |
 | N3 | Small embedding baseline (`all-MiniLM-L6-v2`, exact cosine) | `run_embedding_baseline` implemented behind a new `bench-embed` extra; no runtime dependency; same metrics and table | N1 |
 | N4 | LongMemEval subset adapter | Loader turns a seeded subset of LongMemEval `_s` sessions into documents and scores evidence-session recall@k for the three systems | N1, Q6 in PRD |
 | N5 | Release with `server.json` | Next release contains the `mcp-name` README marker and the `locus-rag` script; `mcp-publisher validate` passes; owner publishes | PRD Q2, Q4 |

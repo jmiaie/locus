@@ -60,6 +60,12 @@ class TemporalKG:
     def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
             conn.executescript(self._SCHEMA)
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(triples)").fetchall()}
+            if "extracted" not in cols:
+                # 1 = produced by populate_from_text (re-derivable from the file);
+                # 0 = asserted via add_triple / add_fact.  Only extracted triples
+                # are replaced when a file is re-indexed or forgotten.
+                conn.execute("ALTER TABLE triples ADD COLUMN extracted INTEGER DEFAULT 0")
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
@@ -107,6 +113,7 @@ class TemporalKG:
                 " AND (valid_to   IS NULL OR valid_to   >= ?)"
             )
             params += [as_of, as_of]
+        sql += " ORDER BY id"
         with self._conn() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [Triple(*row) for row in rows]
@@ -117,7 +124,7 @@ class TemporalKG:
             rows = conn.execute(
                 "SELECT subject, predicate, object, valid_from, valid_to, source "
                 "FROM triples WHERE (subject = ? OR object = ?) "
-                "ORDER BY COALESCE(valid_from, '0000') ASC",
+                "ORDER BY COALESCE(valid_from, '0000') ASC, id ASC",
                 (entity, entity),
             ).fetchall()
         return [Triple(*row) for row in rows]
@@ -125,7 +132,7 @@ class TemporalKG:
     def sources_for_entity(self, entity: str, as_of: str | None = None) -> list[str]:
         entity = self._resolve(entity)
         sql = (
-            "SELECT DISTINCT source FROM triples "
+            "SELECT source FROM triples "
             "WHERE (subject = ? OR object = ?) AND source IS NOT NULL"
         )
         params: list = [entity, entity]
@@ -135,6 +142,7 @@ class TemporalKG:
                 " AND (valid_to   IS NULL OR valid_to   >= ?)"
             )
             params += [as_of, as_of]
+        sql += " GROUP BY source ORDER BY MIN(id)"
         with self._conn() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [r[0] for r in rows]
@@ -145,7 +153,8 @@ class TemporalKG:
             rows = conn.execute(
                 "SELECT DISTINCT subject FROM triples "
                 "UNION "
-                "SELECT DISTINCT object FROM triples"
+                "SELECT DISTINCT object FROM triples "
+                "ORDER BY 1"
             ).fetchall()
         return [r[0] for r in rows if r[0]]
 
@@ -153,7 +162,7 @@ class TemporalKG:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT subject, predicate, object, valid_from, valid_to, source "
-                "FROM triples"
+                "FROM triples ORDER BY id"
             ).fetchall()
         return [Triple(*row) for row in rows]
 
@@ -174,23 +183,92 @@ class TemporalKG:
           - Wikilinks  → (entity, mentioned_in, source)
           - Tags       → (source, tagged_as, tag)
           - Prose      → relation triples via pattern matching (if extract_prose)
+
+        All triples are written in one transaction and flagged ``extracted``
+        so a later re-index of the same source can replace them.
         """
-        count = 0
+        rows = self._extract_rows(text, source=source, extract_prose=extract_prose)
+        if rows:
+            with self._conn() as conn:
+                self._insert_rows(conn, rows)
+        return len(rows)
+
+    @staticmethod
+    def _insert_rows(conn: sqlite3.Connection, rows: list[tuple]) -> None:
+        conn.executemany(
+            "INSERT INTO triples "
+            "(subject, predicate, object, valid_from, valid_to, source, extracted) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+
+    def _extract_rows(
+        self, text: str, source: str | None = None, extract_prose: bool = True,
+    ) -> list[tuple]:
+        rows: list[tuple] = []
+
+        def add(subj: str, pred: str, obj: str) -> None:
+            rows.append((
+                self._resolve(subj.strip()), pred.strip(), self._resolve(obj.strip()),
+                None, None, source, 1,
+            ))
+
         for link in re.findall(r"\[\[([^\]]+)\]\]", text):
-            entity = self._resolve(link.split("|")[0].strip())
+            entity = link.split("|")[0].strip()
             if entity and source:
-                self.add_triple(entity, "mentioned_in", source, source=source)
-                count += 1
+                add(entity, "mentioned_in", source)
         for tag in re.findall(r"#([\w/-]+)", text):
             if source:
-                self.add_triple(source, "tagged_as", tag, source=source)
-                count += 1
+                add(source, "tagged_as", tag)
         if extract_prose:
             from .extractor import extract_triples_from_text
             for pt in extract_triples_from_text(text):
-                self.add_triple(pt.subject, pt.predicate, pt.object, source=source)
-                count += 1
-        return count
+                add(pt.subject, pt.predicate, pt.object)
+        return rows
+
+    def replace_from_files(
+        self,
+        paths: list[Path],
+        base_path: Path | None = None,
+        extract_prose: bool = True,
+        batch_size: int = 500,
+    ) -> int:
+        """Re-extract triples for *paths*: drop each file's previously
+        extracted triples, then insert fresh ones.  Batched transactions."""
+        total = 0
+        conn = self._conn()
+        try:
+            conn.execute("PRAGMA synchronous = NORMAL")
+            for i, path in enumerate(paths, 1):
+                path = Path(path)
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+                source = (
+                    str(path.relative_to(base_path)).replace("\\", "/")
+                    if base_path
+                    else str(path).replace("\\", "/")
+                )
+                conn.execute("DELETE FROM triples WHERE source = ? AND extracted = 1", (source,))
+                rows = self._extract_rows(text, source=source, extract_prose=extract_prose)
+                if rows:
+                    self._insert_rows(conn, rows)
+                    total += len(rows)
+                if i % batch_size == 0:
+                    conn.commit()
+            conn.commit()
+        finally:
+            conn.close()
+        return total
+
+    def remove_extracted(self, source: str) -> int:
+        """Delete triples auto-extracted from *source* (manual facts are kept)."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM triples WHERE source = ? AND extracted = 1", (source,)
+            )
+            return cur.rowcount
 
     def populate_from_file(
         self,
@@ -307,6 +385,7 @@ class TemporalKG:
                 " AND (valid_to   IS NULL OR valid_to   >= ?)"
             )
             params += [as_of, as_of]
+        sql += " ORDER BY id"
 
         with self._conn() as conn:
             rows = conn.execute(sql, params).fetchall()
