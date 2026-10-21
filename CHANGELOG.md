@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed — default analyzer: Porter stemming + English stop-words
+- **New `porter+english` default analyzer.** Index and query terms are Porter-stemmed with a new pure-stdlib, deterministic stemmer (`locus.memory.stemmer`). A larger English function-word stop list is also applied. It matches SQLite FTS5's `porter` tokenizer on 38,997 of the 38,998 distinct alphabetic words in BEIR SciFact + NFCorpus, so the `fts5` and `legacy` backends still rank identically. No new dependencies.
+- **Other analyzers.** `porter` (stemming only) and `plain` (the previous behaviour) are available through `LocusEngine(analyzer=...)`, `Corpus(analyzer=...)`, `LOCUS_ANALYZER`, `locus reindex --analyzer` and `LocusEngine.reindex(analyzer=...)`.
+- **Store migration.** The analyzer is stored in the index. Stores without one, i.e. those written before this change, are re-indexed from stored chunk text with the new default the first time they are opened. To keep the old behaviour, open them with `analyzer="plain"`.
+- **Why.** Measured on test splits after selecting on dev splits only (SciFact train, NFCorpus dev), with a paired bootstrap over the same queries:
+  - nDCG@10 changes vs `plain`: SciFact 0.668 → 0.681 (+0.013, not significant) and NFCorpus 0.306 → 0.329 (+0.022, significant).
+  - LongMemEval-S R@5 vs `plain`: 0.964 → 0.977 (+0.013, significant).
+  - vs LlamaIndex BM25 (bm25s): NFCorpus +0.006 (significant), SciFact −0.006 (not significant).
+- **BM25 parameters.** k1/b were swept on dev (k1 0.6–2.0 × b 0.3–0.9). The best setting gained ≤ 0.002 nDCG@10 for `porter+english`, and the best parameters disagreed between datasets. FTS5's `bm25()` fixes k1=1.2, b=0.75, so these values are unchanged.
+- **Latency.** Query latency is 1.23× `plain` on SciFact and 1.01× on NFCorpus (p50, interleaved in one process). Index build time is about +6–12%.
+- **API behaviour.** `top_terms()` / `inspect_doc()` now report index terms (stems), and `get_posting_list()` / `term_chunk_frequency()` map a plain word to its index term.
+
 ### Changed — retrieval engine (FTS5 + honest benchmarks)
 - **SQLite FTS5 index is the default backend.** BM25 (k1=1.2, b=0.75) is scored inside SQLite with `bm25()`; no new dependencies. If the interpreter's SQLite lacks FTS5, Locus falls back to the pure-Python `legacy` backend, which uses the same formula and gives identical rankings. Choose explicitly with `LocusEngine(index_backend=...)` or `LOCUS_INDEX_BACKEND=fts5|legacy`.
 - **Stores migrate automatically.** A 1.0.0 store is rebuilt into FTS5 on first open (`meta.schema_version = 2`) and the old `term_index` is cleared. New `locus reindex [--backend fts5|legacy]` / `LocusEngine.reindex()` rebuilds or switches backends. Migration is one-way: to go back to 1.0.0, index into a fresh store (1.0.0 sees an empty term index in a migrated store).

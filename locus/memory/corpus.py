@@ -10,7 +10,8 @@ Two interchangeable index backends, both pure standard library:
   automatically when the interpreter's SQLite was built without FTS5, and
   selectable with ``LOCUS_INDEX_BACKEND=legacy``.
 
-Both backends index the *same* token stream (:func:`tokenize`) and use the
+Both backends index the *same* term stream (:func:`analyze`; Porter-stemmed
+by default, see ``ANALYZERS``) and use the
 same BM25 formula (k1=1.2, b=0.75, FTS5's IDF), so they rank identically up
 to floating-point rounding.  Ties are broken by index order (chunk rowid),
 never by hash order, so results are reproducible run to run.
@@ -33,6 +34,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from .chunker import Chunker, Chunk
+from .stemmer import stem
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,26 @@ STOPWORDS = frozenset({
     "it", "its", "as", "not", "no", "so", "if", "then", "than", "more",
 })
 
+# Optional larger English stop-word list (function words: pronouns,
+# auxiliaries, prepositions, conjunctions), used by the "+english" analyzers.
+ENGLISH_STOPWORDS = STOPWORDS | frozenset("""
+i me my myself we our ours ourselves you your yours yourself yourselves he him
+his himself she her hers herself they them their theirs themselves what which
+who whom am about against between into through during before after above below
+up down out off over under again further once here there when where why how all
+any both each few most other some such nor only own same too very can just now
+also onto upon via
+""".split())
+
+# Lexical analyzers (how text becomes index terms).  The analyzer is stored in
+# the index; opening a store with a different analyzer rebuilds the index from
+# the stored chunk text (no source files are re-read).
+#   plain           lower-case, \w tokens, Locus stop-words (Locus <= 1.1)
+#   porter          plain + Porter stemming (locus.memory.stemmer)
+#   porter+english  porter + the larger ENGLISH_STOPWORDS list
+ANALYZERS = ("plain", "porter", "porter+english")
+DEFAULT_ANALYZER = "porter+english"
+
 # BM25 parameters.  FTS5's bm25() hard-codes k1=1.2, b=0.75; the legacy
 # backend uses the same values so the two backends agree.
 BM25_K1 = 1.2
@@ -58,9 +80,33 @@ _FTS_TOKENIZER = "ascii tokenchars '_'"
 
 
 def tokenize(text: str) -> list[str]:
+    """Plain tokens: lower-case, \\w runs, Locus stop-words removed, len > 1.
+
+    Unstemmed.  Index terms come from :func:`analyze`, which may stem.
+    """
     text = text.lower()
     text = re.sub(r"[^\w\s]", " ", text)
     return [w for w in text.split() if w not in STOPWORDS and len(w) > 1]
+
+
+def _env_analyzer() -> Optional[str]:
+    env = os.environ.get("LOCUS_ANALYZER", "").strip().lower()
+    if env and env not in ANALYZERS:
+        logger.warning("Ignoring LOCUS_ANALYZER=%r; use one of %s", env, ANALYZERS)
+        return None
+    return env or None
+
+
+def analyze(text: str, analyzer: str = "plain") -> list[str]:
+    """Index/query terms for *text* under *analyzer* (see ``ANALYZERS``)."""
+    if analyzer == "plain":
+        return tokenize(text)
+    if analyzer not in ANALYZERS:
+        raise ValueError(f"Unknown analyzer {analyzer!r}; use one of {ANALYZERS}")
+    terms = tokenize(text)
+    if analyzer == "porter+english":
+        terms = [t for t in terms if t not in ENGLISH_STOPWORDS]
+    return [stem(t) for t in terms]
 
 
 _FTS5_AVAILABLE: Optional[bool] = None
@@ -93,7 +139,7 @@ def _default_backend() -> str:
 
 
 def _fts_query(terms: Iterable[str]) -> str:
-    # Terms come from tokenize(): only \w characters, so quoting is safe.
+    # Terms come from analyze(): only \w characters, so quoting is safe.
     return " OR ".join(f'"{t}"' for t in terms)
 
 
@@ -142,6 +188,7 @@ class Corpus:
         store_path: Path,
         section_aware: bool = True,
         backend: Optional[str] = None,
+        analyzer: Optional[str] = None,
     ):
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
@@ -151,6 +198,10 @@ class Corpus:
         self._avgdl_cache: Optional[float] = None
         self._chunk_stats_cache: Optional[tuple[int, float]] = None
         self._requested_backend = backend
+        if analyzer is not None and analyzer not in ANALYZERS:
+            raise ValueError(f"Unknown analyzer {analyzer!r}; use one of {ANALYZERS}")
+        self._requested_analyzer = analyzer or _env_analyzer()
+        self.analyzer: str = self._requested_analyzer or DEFAULT_ANALYZER
         self.backend: str = "legacy"
         #: Bumped on every write; lets in-memory caches detect stale data.
         self.generation: int = 0
@@ -172,6 +223,9 @@ class Corpus:
             if "n_tokens" not in ccols:
                 conn.execute("ALTER TABLE chunks ADD COLUMN n_tokens INTEGER")
             stored = self._meta_get(conn, "index_backend")
+            # Stores written before analyzers existed were indexed "plain".
+            meta_analyzer = self._meta_get(conn, "analyzer")
+            stored_analyzer = meta_analyzer or "plain"
             has_chunks = conn.execute("SELECT 1 FROM chunks LIMIT 1").fetchone() is not None
 
         want = self._requested_backend or _default_backend()
@@ -194,11 +248,18 @@ class Corpus:
         if want == "fts5":
             with self._conn() as conn:
                 conn.executescript(self._FTS_SCHEMA)
-        if current != want and has_chunks:
-            logger.info("Migrating Locus index %s -> %s", current, want)
+        # Analyzer: an explicit request (argument or LOCUS_ANALYZER) wins; otherwise
+        # keep what the store was built with; stores from before analyzers
+        # existed (no meta) are upgraded to DEFAULT_ANALYZER.
+        if self._requested_analyzer is None and meta_analyzer in ANALYZERS:
+            self.analyzer = meta_analyzer
+        if (current != want or stored_analyzer != self.analyzer) and has_chunks:
+            logger.info("Re-indexing Locus store %s/%s -> %s/%s",
+                        current, stored_analyzer, want, self.analyzer)
             self.rebuild_index(backend=want, _from=current)
         with self._conn() as conn:
             self._meta_set(conn, "index_backend", want)
+            self._meta_set(conn, "analyzer", self.analyzer)
             self._meta_set(conn, "schema_version", SCHEMA_VERSION)
 
     @staticmethod
@@ -210,7 +271,16 @@ class Corpus:
     def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
         conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
 
-    def rebuild_index(self, backend: Optional[str] = None, _from: Optional[str] = None) -> dict:
+    def analyze(self, text: str) -> list[str]:
+        """Terms for *text* under this store's analyzer (use for queries too)."""
+        return analyze(text, self.analyzer)
+
+    def rebuild_index(
+        self,
+        backend: Optional[str] = None,
+        _from: Optional[str] = None,
+        analyzer: Optional[str] = None,
+    ) -> dict:
         """
         Rebuild the lexical index from the stored chunk text.
 
@@ -220,6 +290,10 @@ class Corpus:
         Returns ``{"backend": ..., "chunks": n}``.
         """
         backend = backend or self.backend
+        if analyzer is not None:
+            if analyzer not in ANALYZERS:
+                raise ValueError(f"Unknown analyzer {analyzer!r}; use one of {ANALYZERS}")
+            self.analyzer = analyzer
         if backend == "fts5" and not fts5_available():
             raise RuntimeError("SQLite FTS5 is not available in this Python build")
         with self._conn() as conn:
@@ -234,7 +308,7 @@ class Corpus:
             batch_terms: list[tuple[str, str, float]] = []
             batch_len: list[tuple[int, int]] = []
             for rowid, cid, content in cur.fetchall():
-                terms = tokenize(content)
+                terms = self.analyze(content)
                 batch_len.append((len(terms), rowid))
                 if backend == "fts5":
                     batch_fts.append((rowid, " ".join(terms)))
@@ -256,9 +330,10 @@ class Corpus:
                 except sqlite3.OperationalError:
                     pass  # no FTS5 table / module
             self._meta_set(conn, "index_backend", backend)
+            self._meta_set(conn, "analyzer", self.analyzer)
         self.backend = backend
         self._invalidate_stats()
-        return {"backend": backend, "chunks": n, "migrated_from": _from}
+        return {"backend": backend, "analyzer": self.analyzer, "chunks": n, "migrated_from": _from}
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
@@ -403,7 +478,7 @@ class Corpus:
         return [(t, chunk_id, c / total) for t, c in sorted(freq.items())]
 
     def _store_chunk_conn(self, conn: sqlite3.Connection, chunk: Chunk) -> None:
-        terms = tokenize(chunk.content)
+        terms = self.analyze(chunk.content)
         cur = conn.execute(
             "INSERT OR REPLACE INTO chunks (id, doc_path, content, start_word, metadata, n_tokens) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -434,7 +509,8 @@ class Corpus:
 
     def search_bm25(self, terms: list[str], limit: int = 10) -> list[tuple[str, float]]:
         """
-        Rank chunks for the (already tokenised) query *terms* with BM25.
+        Rank chunks for the (already analysed, see :meth:`analyze`) query
+        *terms* with BM25.
 
         Returns ``[(chunk_id, score), ...]`` sorted by score descending, ties
         broken by index order (chunk rowid; files are indexed in sorted path
@@ -471,7 +547,7 @@ class Corpus:
             if missing:
                 conn.executemany(
                     "UPDATE chunks SET n_tokens = ? WHERE rowid = ?",
-                    [(len(tokenize(c)), r) for r, c in missing],
+                    [(len(self.analyze(c)), r) for r, c in missing],
                 )
                 conn.commit()
             n, avg = conn.execute(
@@ -586,8 +662,20 @@ class Corpus:
             if links:
                 yield links
 
+    def index_term(self, word: str) -> str:
+        """The index term for a single *word* under this store's analyzer."""
+        w = word.lower()
+        return w if self.analyzer == "plain" else stem(w)
+
     def get_posting_list(self, term: str) -> dict[str, float]:
-        """``{chunk_id: normalised tf}`` for every chunk containing *term*."""
+        """``{chunk_id: normalised tf}`` for every chunk containing *term*.
+
+        *term* is a plain word; it is mapped to its index term (e.g. stemmed).
+        """
+        return self._posting_list(self.index_term(term))
+
+    def _posting_list(self, term: str) -> dict[str, float]:
+        """Posting list for an already-analysed index *term*."""
         if self.backend == "fts5":
             with self._conn() as conn:
                 rows = conn.execute(
@@ -605,6 +693,7 @@ class Corpus:
 
     def term_chunk_frequency(self, term: str) -> int:
         """Number of chunks containing *term* (document frequency)."""
+        term = self.index_term(term)
         with self._conn() as conn:
             if self.backend == "fts5":
                 row = conn.execute("SELECT doc FROM chunk_fts_row WHERE term = ?", (term,)).fetchone()
@@ -663,6 +752,7 @@ class Corpus:
             "chunk_count": self.chunk_count(),
             "avg_doc_length": round(self.avg_doc_length(), 1),
             "index_backend": self.backend,
+            "analyzer": self.analyzer,
         }
 
     # ------------------------------------------------------------------
@@ -683,7 +773,7 @@ class Corpus:
                 ).fetchall()
             out = []
             for term, doc in rows:
-                total_tf = sum(self.get_posting_list(term).values())
+                total_tf = sum(self._posting_list(term).values())
                 out.append({"term": term, "doc_count": int(doc), "total_tf": round(total_tf, 4)})
             return out
         with self._conn() as conn:
@@ -713,7 +803,7 @@ class Corpus:
         chunk_count: dict[str, int] = {}
         total_tf: dict[str, float] = {}
         for chunk in self.get_chunks_for_doc(doc_path):
-            terms = tokenize(chunk.content)
+            terms = self.analyze(chunk.content)
             if not terms:
                 continue
             freq: dict[str, int] = {}

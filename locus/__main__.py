@@ -36,6 +36,8 @@ def main() -> None:
 
     p_reindex = sub.add_parser("reindex", help="Rebuild the lexical index from stored chunks")
     p_reindex.add_argument("--backend", choices=["fts5", "legacy"], default=None)
+    p_reindex.add_argument("--analyzer", choices=["plain", "porter", "porter+english"], default=None,
+                           help="Term analyzer (default: keep the store's; new stores use porter+english)")
 
     p_explain = sub.add_parser("explain", help="Explain why a chunk was retrieved")
     p_explain.add_argument("chunk_id")
@@ -258,7 +260,7 @@ def main() -> None:
         print(json.dumps(engine.index(args.path, pattern=args.pattern), indent=2))
 
     elif args.cmd == "reindex":
-        print(json.dumps(engine.reindex(backend=args.backend), indent=2))
+        print(json.dumps(engine.reindex(backend=args.backend, analyzer=args.analyzer), indent=2))
 
     elif args.cmd == "retrieve":
         chunks = engine.retrieve(

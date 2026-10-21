@@ -79,7 +79,7 @@ class DocSimilarity:
         for entry in terms:
             term = entry["term"]
             tf = entry["total_tf"]
-            df = len(self._corpus.get_posting_list(term))
+            df = len(self._corpus._posting_list(term))  # term is already analysed
             if df == 0:
                 continue
             idf = math.log((N + 1) / (df + 1)) + 1.0  # smoothed IDF

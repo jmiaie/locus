@@ -73,6 +73,25 @@ link- and frontmatter-rich vaults: `engine.retrieve(q, mode="hybrid")`,
 or `mode` on the `locus_retrieve` MCP tool. Passing `as_of` selects hybrid, since the temporal filter
 acts on KG facts.
 
+**Analyzer (how text becomes index terms).** The default is `porter+english`. It lower-cases text, drops
+the Locus stop-words plus a larger English function-word list, and applies Porter stemming with a
+pure-stdlib stemmer (`locus/memory/stemmer.py`). On every Porter-stemmable word in the BEIR corpora it
+gives the same output as SQLite FTS5's `porter` tokenizer, apart from one degenerate word.
+The other analyzers are `porter` (stemming only) and `plain` (the pre-2026-10-21 behaviour: no
+stemming, small stop-word list).
+
+How the analyzer is chosen:
+- Set it with `LocusEngine(analyzer=...)`, `LOCUS_ANALYZER=...` or `locus reindex --analyzer ...`.
+- A store remembers its analyzer.
+- Asking for a different one re-indexes from the stored chunks; source files are not re-read.
+- Stores created before analyzers existed are re-indexed with the default on first open.
+
+Index-term APIs follow the analyzer:
+- `top_terms()` and `inspect_doc()` report stems.
+- `get_posting_list("running")` is the same as `get_posting_list("run")`.
+
+Use `analyzer="plain"` to keep exact-token behaviour.
+
 | Stage-2 signal | Weight (× `rerank_alpha`) | What it captures |
 |:---|:---|:---|
 | KG Entity | intent-weighted | Entities from the query linked to documents |
@@ -448,12 +467,21 @@ indicative. 95% CIs are seeded bootstrap (B = 10,000) over queries.
 
 | System | SciFact (300 q) | NFCorpus (323 q) | p50 latency (SciFact / NFCorpus) |
 |---|---|---|---|
-| **Locus default (`mode="bm25"`, FTS5)** | **0.668** [0.623, 0.713] | **0.306** [0.272, 0.341] | 2.7 ms / 1.2 ms |
-| Locus hybrid (`mode="hybrid"`) | 0.669 [0.624, 0.714] | 0.306 [0.272, 0.341] | 7.7 ms / 4.6 ms |
-| `rank_bm25` BM25Okapi (same tokenizer) | 0.664 [0.618, 0.709] | 0.308 [0.274, 0.343] | 7.2 ms / 1.6 ms |
+| **Locus default (`mode="bm25"`, FTS5, `porter+english` analyzer)** ¹ | **0.681** [0.638, 0.724] | **0.329** [0.294, 0.364] | 2.3 ms / 0.8 ms ² |
+| Locus hybrid (`mode="hybrid"`, `porter+english`) ¹ | 0.678 [0.635, 0.721] | 0.328 [0.294, 0.363] | 7.2 ms / 4.1 ms |
+| Locus BM25, `plain` analyzer (the 2026-10-20 default) | 0.668 [0.623, 0.713] | 0.306 [0.272, 0.341] | 2.7 ms / 1.2 ms |
+| Locus hybrid, `plain` analyzer | 0.669 [0.624, 0.714] | 0.306 [0.272, 0.341] | 7.7 ms / 4.6 ms |
+| LlamaIndex `BM25Retriever` (bm25s, stemmer + stop-words, defaults) ¹ | 0.687 [0.644, 0.730] | 0.323 [0.288, 0.358] | 0.5 ms / 0.4 ms |
+| `rank_bm25` BM25Okapi (Locus `plain` tokens) | 0.664 [0.618, 0.709] | 0.308 [0.274, 0.343] | 7.2 ms / 1.6 ms |
 | *Locus 1.0.0 six-signal pipeline (before)* | *0.581* [0.538, 0.624] | *0.284* [0.251, 0.318] | *878 ms / 404 ms* |
 
-- **Parity with `rank_bm25`:** paired difference +0.0045 [−0.0015, +0.0111] on SciFact and −0.0017 [−0.0043, +0.0009] on NFCorpus — not significant either way.
+¹ Measured 2026-10-21 (analyzer change; artefacts in [`benchmarks/published/2026-10-21-analyzer/`](benchmarks/published/2026-10-21-analyzer/)).
+² Interleaved in-process measurement, same session as `plain`: 1.23× / 1.01× the `plain` p50 (SciFact / NFCorpus). Other rows' latencies are from separate sessions.
+
+- **Stemming + stop-words (default since 2026-10-21):** vs the `plain` analyzer, +0.0129 [−0.0064, +0.0325] nDCG@10 on SciFact (not significant), **+0.0223 [+0.0119, +0.0335]** on NFCorpus and **+0.0128 [+0.0021, +0.0255]** LongMemEval-S R@5 (0.964 → 0.977, n = 470). The NFCorpus and LongMemEval-S gains are significant. The analyzer was chosen on the dev splits only; k1/b stay at FTS5's 1.2/0.75 (see below).
+- **vs LlamaIndex BM25 (bm25s):** −0.0059 [−0.0159, +0.0043] on SciFact (not significant), **+0.0058 [+0.0010, +0.0115]** on NFCorpus (significant) and +0.0064 [−0.0064, +0.0213] on LongMemEval-S (not significant). bm25s is still faster per query.
+- **vs `rank_bm25`:** +0.0174 [−0.0020, +0.0378] (SciFact), **+0.0206 [+0.0104, +0.0317]** (NFCorpus), +0.0043 [−0.0064, +0.0170] (LongMemEval-S).
+- **Earlier comparison (`plain` analyzer) — parity with `rank_bm25`:** paired difference +0.0045 [−0.0015, +0.0111] on SciFact and −0.0017 [−0.0043, +0.0009] on NFCorpus — not significant either way.
 - **Hybrid vs BM25:** +0.0007 [−0.0056, +0.0080] (SciFact) and −0.0001 [−0.0012, +0.0009] (NFCorpus) — no significant gain, so BM25 is the default.
   The re-rank weight and depth were chosen on the dev splits only (SciFact train, NFCorpus dev); no larger weight helped there.
 - **vs Locus 1.0.0:** +0.0872 [+0.0636, +0.1111] (SciFact) and +0.0220 [+0.0138, +0.0305] (NFCorpus) nDCG@10 over the old six-signal default; +0.0278 / +0.0124 over the old BM25-only path (both significant).
