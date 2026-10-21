@@ -1,0 +1,8 @@
+{
+ "scifact-train|plain": 0.668,
+ "scifact-train|porter": 0.6955,
+ "scifact-train|porter+english": 0.6956,
+ "nfcorpus-dev|plain": 0.265,
+ "nfcorpus-dev|porter": 0.2864,
+ "nfcorpus-dev|porter+english": 0.2939
+}

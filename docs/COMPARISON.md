@@ -1,6 +1,27 @@
 <!-- Measured 2026-10-20/21 on a shared CPU VM. Raw per-query results, harness and artefacts were kept outside this repo; numbers are copied verbatim from that run. Locus main @10ddcbf, OMPA main @32e9ce2. -->
 # Comparison: Locus and OMPA vs open-source memory and retrieval stacks (2026-10-20/21)
 
+> **Update, 2026-10-21: Locus default analyzer is now `porter+english`** (Porter stemming plus English stop-words; see
+> [`benchmarks/README.md`](../benchmarks/README.md#analyzer-porter-stemming--english-stop-words-2026-10-21)).
+> The tables below were measured on 2026-10-20 at main `10ddcbf`, which used the `plain` analyzer. They are kept unchanged.
+> With the new default, measured on the same queries (BM25 mode; paired bootstrap, 95% CI):
+>
+> | | SciFact nDCG@10 | NFCorpus nDCG@10 | LongMemEval-S R@5 |
+> |---|---|---|---|
+> | Locus, new default | 0.681 [0.638, 0.724] | 0.329 [0.294, 0.364] | 0.977 [0.962, 0.989] |
+> | Δ vs Locus `plain` (10ddcbf) | +0.013 (ns) | **+0.022** (sig.) | **+0.013** (sig.) |
+> | Δ vs LlamaIndex BM25 | −0.006 (ns) | **+0.006** (sig.) | +0.006 (ns) |
+> | Δ vs rank_bm25 | +0.017 (ns) | **+0.021** (sig.) | +0.004 (ns) |
+> | Δ vs OMPA main 32e9ce2 | not run | not run | −0.004 (ns) |
+>
+> What changed in the comparison:
+> - LlamaIndex BM25 no longer beats Locus significantly anywhere. Locus now wins significantly on NFCorpus.
+> - LlamaIndex is still ahead on SciFact (not significant) and is still faster per query: 0.5 ms vs 2.3 ms p50 on SciFact.
+> - rank_bm25's significant LongMemEval-S lead is gone.
+> - OMPA's LongMemEval-S score is now within noise of Locus.
+> - Locus query latency rose 1.23× on SciFact and 1.01× on NFCorpus, both p50.
+> - The win/loss bullets below describe the 10ddcbf (`plain`) measurement.
+
 ## Summary of wins and losses (every number below is measured on this box; see the tables)
 
 **Where Locus (main 10ddcbf) wins**

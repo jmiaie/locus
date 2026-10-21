@@ -15,7 +15,7 @@ the output is fully deterministic.  Searching never writes to the store.
 import logging
 from dataclasses import dataclass, field
 
-from ..memory.corpus import BM25_B, BM25_K1, Corpus, tokenize
+from ..memory.corpus import BM25_B, BM25_K1, Corpus, tokenize  # noqa: F401  (re-export)
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class BM25Retriever:
         self.corpus = corpus
 
     def search(self, query: str, limit: int = 10) -> list[ScoredChunk]:
-        terms = tokenize(query)
+        terms = self.corpus.analyze(query)
         if not terms or limit <= 0:
             return []
         ranked = self.corpus.search_bm25(terms, limit=limit)

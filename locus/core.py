@@ -100,6 +100,7 @@ class LocusEngine:
         store_path: str | Path = ".locus",
         retrieval_mode: str | None = None,
         index_backend: str | None = None,
+        analyzer: str | None = None,
         rerank_depth: int = RERANK_DEPTH,
         rerank_alpha: float = RERANK_ALPHA,
     ):
@@ -115,7 +116,9 @@ class LocusEngine:
         # Entity resolver must be initialised before KG (transparent alias lookups)
         self.resolver = EntityResolver(self.store_path / "resolver.sqlite3")
 
-        self.corpus = Corpus(self.store_path / "corpus", section_aware=True, backend=index_backend)
+        self.corpus = Corpus(
+            self.store_path / "corpus", section_aware=True, backend=index_backend, analyzer=analyzer,
+        )
         self.kg = TemporalKG(str(self.store_path / "kg.sqlite3"), resolver=self.resolver)
         self.bulletin = ContextBulletin(
             archive_path=self.store_path / "archive",
@@ -206,13 +209,13 @@ class LocusEngine:
         self._invalidate_cache()
         return self.index(path, pattern=pattern)
 
-    def reindex(self, backend: str | None = None) -> dict:
+    def reindex(self, backend: str | None = None, analyzer: str | None = None) -> dict:
         """Rebuild the lexical index from stored chunks (no file reads).
 
         Clean re-index / migration path, e.g. ``reindex(backend="fts5")``
         after upgrading a store created by Locus <= 1.0.0.
         """
-        result = self.corpus.rebuild_index(backend=backend)
+        result = self.corpus.rebuild_index(backend=backend, analyzer=analyzer)
         self._invalidate_cache()
         return result
 
@@ -731,8 +734,8 @@ class LocusEngine:
 
         if query:
             # BM25 — which query terms appear in this chunk?
-            terms = tokenize(query)
-            matched = [t for t in terms if chunk_id in self.corpus.get_posting_list(t)]
+            terms = self.corpus.analyze(query)
+            matched = [t for t in terms if chunk_id in self.corpus._posting_list(t)]
             if matched:
                 result["bm25_matched_terms"] = matched
                 signals.append(f"BM25: terms [{', '.join(matched)}] appear in this chunk")

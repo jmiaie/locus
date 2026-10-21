@@ -217,3 +217,55 @@ python -m locus.bench.beir data/beir/scifact --split test --out benchmarks/resul
 
 Results land in `benchmarks/results/` (git-ignored). Published summaries of the runs above are in
 [`published/2026-10-20/`](published/2026-10-20/).
+
+## Analyzer: Porter stemming + English stop-words (2026-10-21)
+
+Artefacts and as-run scripts: [`published/2026-10-21-analyzer/`](published/2026-10-21-analyzer/).
+The baselines are the 2026-10-20 scorecard runs ([`docs/COMPARISON.md`](../docs/COMPARISON.md)).
+
+**Dev (selection only).** BM25 mode, real engine, nDCG@10:
+
+| Analyzer | SciFact-train (809 q) | NFCorpus-dev (324 q) |
+|---|---|---|
+| `plain` (previous) | 0.6680 | 0.2650 |
+| `porter` | 0.6955 | 0.2864 |
+| **`porter+english`** | **0.6956** | **0.2939** |
+
+`porter+english` was best on both dev sets, so it was selected.
+
+A doc-level dev sweep of k1 ∈ {0.6, 0.9, 1.2, 1.5, 2.0} × b ∈ {0.3, 0.5, 0.75, 0.9} improved `porter+english`
+by at most +0.0003 (SciFact) and +0.0018 (NFCorpus) over k1=1.2/b=0.75. The best settings also disagreed
+between the two datasets, and FTS5's `bm25()` fixes k1/b. The parameters are therefore unchanged.
+
+**Test.** BM25 mode, mean [95% CI]; paired differences against the previous default (`plain`):
+
+| Analyzer | SciFact nDCG@10 | NFCorpus nDCG@10 | LongMemEval-S R_any@5 (470 q) |
+|---|---|---|---|
+| `plain` (= main @9e62d95; identical rankings on all 1,093 queries) | 0.6682 [0.6225, 0.7128] | 0.3063 [0.2723, 0.3412] | 0.9638 [0.9468, 0.9787] |
+| `porter` | 0.6832 · Δ +0.0151 [−0.0037, +0.0343] | 0.3224 · Δ **+0.0161 [+0.0061, +0.0265]** | 0.9702 · Δ +0.0064 [−0.0064, +0.0191] |
+| **`porter+english`** | 0.6810 · Δ +0.0129 [−0.0064, +0.0325] | 0.3286 · Δ **+0.0223 [+0.0119, +0.0335]** | 0.9766 · Δ **+0.0128 [+0.0021, +0.0255]** |
+
+The default analyzer (`porter+english`) against the other systems, as paired differences:
+
+| vs | SciFact | NFCorpus | LongMemEval-S |
+|---|---|---|---|
+| LlamaIndex BM25 (bm25s, defaults) | −0.0059 [−0.0159, +0.0043] | **+0.0058 [+0.0010, +0.0115]** | +0.0064 [−0.0064, +0.0213] |
+| rank_bm25 | +0.0174 [−0.0020, +0.0378] | **+0.0206 [+0.0104, +0.0317]** | +0.0043 [−0.0064, +0.0170] |
+| OMPA main @32e9ce2 | not run | not run | −0.0043 [−0.0213, +0.0106] |
+
+Hybrid mode with `porter+english` scores 0.6783 / 0.3284 / 0.9766 on SciFact / NFCorpus / LongMemEval-S.
+That is still no better than BM25 mode.
+
+**Latency.** In-process and interleaved: 5 rounds alternating analyzers, median per query.
+
+| | SciFact p50 / p95 | NFCorpus p50 / p95 | Index build (SciFact / NFCorpus) |
+|---|---|---|---|
+| `plain` | 1.90 / 3.54 ms | 0.79 / 1.65 ms | 2.76 / 1.90 s |
+| `porter+english` | 2.35 / 4.01 ms (1.23× / 1.13×) | 0.80 / 1.68 ms (1.01× / 1.02×) | 2.94 / 2.12 s |
+
+Stemmed terms have longer posting lists, which explains the SciFact increase.
+
+**Decision.** `porter+english` is significantly better than the previous default on NFCorpus and on
+LongMemEval-S. It is not significantly different on SciFact, where the point estimate is +0.013. Latency stays within 1.25×.
+It is therefore the default. LlamaIndex BM25 is still ahead on SciFact (not significant) and faster per query.
+

@@ -2433,8 +2433,10 @@ def test_top_terms_most_frequent_ranked_first(tmp_path):
     engine.index(tmp_path)
     terms = engine.top_terms(limit=5)
     names = [t["term"] for t in terms]
-    # "authentication" appears in both docs — should be near the top
-    assert "authentication" in names
+    # "authentication" appears in both docs — should be near the top.
+    # top_terms reports index terms (Porter stems under the default analyzer).
+    assert engine.corpus.index_term("authentication") in names
+    assert names[0] == engine.corpus.index_term("authentication")
 
 
 def test_inspect_doc_returns_structure(tmp_path):

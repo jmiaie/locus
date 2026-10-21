@@ -1,0 +1,48 @@
+{
+ "scifact": {
+  "plain": {
+   "index_s": 2.76,
+   "p50_ms": 1.904,
+   "p95_ms": 3.536,
+   "p50_ratio_vs_plain": 1.0,
+   "p95_ratio_vs_plain": 1.0
+  },
+  "porter": {
+   "index_s": 3.07,
+   "p50_ms": 2.45,
+   "p95_ms": 4.363,
+   "p50_ratio_vs_plain": 1.29,
+   "p95_ratio_vs_plain": 1.23
+  },
+  "porter+english": {
+   "index_s": 2.94,
+   "p50_ms": 2.345,
+   "p95_ms": 4.009,
+   "p50_ratio_vs_plain": 1.23,
+   "p95_ratio_vs_plain": 1.13
+  }
+ },
+ "nfcorpus": {
+  "plain": {
+   "index_s": 1.9,
+   "p50_ms": 0.793,
+   "p95_ms": 1.648,
+   "p50_ratio_vs_plain": 1.0,
+   "p95_ratio_vs_plain": 1.0
+  },
+  "porter": {
+   "index_s": 2.16,
+   "p50_ms": 0.813,
+   "p95_ms": 1.739,
+   "p50_ratio_vs_plain": 1.03,
+   "p95_ratio_vs_plain": 1.06
+  },
+  "porter+english": {
+   "index_s": 2.12,
+   "p50_ms": 0.798,
+   "p95_ms": 1.684,
+   "p50_ratio_vs_plain": 1.01,
+   "p95_ratio_vs_plain": 1.02
+  }
+ }
+}
