@@ -1,0 +1,463 @@
+{
+ "summary": {
+  "all": {
+   "n": 21,
+   "R@1": 0.667,
+   "R@5": 0.952,
+   "R_all@5": 0.952,
+   "MRR": 0.775
+  },
+  "lookup_and_rfi_trace": {
+   "n": 15,
+   "R@1": 0.667,
+   "R@5": 0.933,
+   "R_all@5": 0.933,
+   "MRR": 0.772
+  },
+  "point_in_time": {
+   "n": 6,
+   "R@1": 0.667,
+   "R@5": 1.0,
+   "R_all@5": 1.0,
+   "MRR": 0.783,
+   "R@1_without_as_of_view": 0.167
+  }
+ },
+ "questions": [
+  {
+   "id": "Q01",
+   "kind": "lookup",
+   "query": "What compressive strength is specified for the columns and shear walls?",
+   "as_of": null,
+   "expected": [
+    "specs/03-30-00-cast-in-place-concrete-rev0.md",
+    "specs/03-30-00-cast-in-place-concrete-rev1.md"
+   ],
+   "top5": [
+    "specs/03-30-00-cast-in-place-concrete-rev0.md",
+    "specs/03-30-00-cast-in-place-concrete-rev1.md",
+    "submittals/SUB-03-001-concrete-mix-designs.md",
+    "permits/BP-2026-0418-permit-conditions.md",
+    "rfis/RFI-007-curtain-wall-embeds-slab-edge.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0
+  },
+  {
+   "id": "Q02",
+   "kind": "rfi-trace",
+   "query": "Why was the Level 2 slab thickened and what did it cost?",
+   "as_of": null,
+   "expected": [
+    "change-orders/CO-002-level-2-slab-upgrade.md",
+    "rfis/RFI-011-level-2-slab-vibration-mri.md"
+   ],
+   "top5": [
+    "rfis/RFI-019-stair-2-delayed-egress.md",
+    "rfis/RFI-021-low-cylinder-breaks-level-2.md",
+    "specs/03-30-00-cast-in-place-concrete-rev1.md",
+    "change-orders/CO-003-roof-membrane-upgrade.md",
+    "submittals/SUB-03-001-concrete-mix-designs.md"
+   ],
+   "hit@1": false,
+   "hit@5": false,
+   "all@5": false,
+   "rr": 0.0
+  },
+  {
+   "id": "Q03",
+   "kind": "rfi-trace",
+   "query": "Which change order paid for the roof membrane upgrade and how many days were added?",
+   "as_of": null,
+   "expected": [
+    "change-orders/CO-003-roof-membrane-upgrade.md"
+   ],
+   "top5": [
+    "change-orders/CO-003-roof-membrane-upgrade.md",
+    "meetings/OAC-meeting-14-2026-04-22.md",
+    "rfis/RFI-012-roof-membrane-mechanical-well.md",
+    "change-orders/CO-002-level-2-slab-upgrade.md",
+    "specs/07-54-23-tpo-roofing-rev0.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0
+  },
+  {
+   "id": "Q04",
+   "kind": "rfi-trace",
+   "query": "How was the curtain wall embed plate conflict with the slab edge bars resolved?",
+   "as_of": null,
+   "expected": [
+    "rfis/RFI-007-curtain-wall-embeds-slab-edge.md"
+   ],
+   "top5": [
+    "rfis/RFI-007-curtain-wall-embeds-slab-edge.md",
+    "specs/03-30-00-cast-in-place-concrete-rev1.md",
+    "specs/03-30-00-cast-in-place-concrete-rev0.md",
+    "change-orders/CO-002-level-2-slab-upgrade.md",
+    "permits/BP-2026-0418-permit-conditions.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0
+  },
+  {
+   "id": "Q05",
+   "kind": "rfi-trace",
+   "query": "Were the low concrete cylinder breaks on the Level 2 pour accepted?",
+   "as_of": null,
+   "expected": [
+    "rfis/RFI-021-low-cylinder-breaks-level-2.md"
+   ],
+   "top5": [
+    "rfis/RFI-021-low-cylinder-breaks-level-2.md",
+    "meetings/OAC-meeting-14-2026-04-22.md",
+    "meetings/OAC-meeting-17-2026-06-10.md",
+    "specs/03-30-00-cast-in-place-concrete-rev1.md",
+    "specs/03-30-00-cast-in-place-concrete-rev0.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0
+  },
+  {
+   "id": "Q06",
+   "kind": "lookup",
+   "query": "What are the permitted Saturday work hours?",
+   "as_of": null,
+   "expected": [
+    "permits/BP-2026-0418-amendment-1-work-hours.md"
+   ],
+   "top5": [
+    "permits/BP-2026-0418-amendment-1-work-hours.md",
+    "meetings/OAC-meeting-14-2026-04-22.md",
+    "permits/BP-2026-0418-permit-conditions.md",
+    "specs/08-71-00-door-hardware-rev1.md",
+    "lease/lease-abstract-suite-200-ardell-imaging.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0
+  },
+  {
+   "id": "Q07",
+   "kind": "lookup",
+   "query": "Does the permit allow delayed egress locks on exit stair doors?",
+   "as_of": null,
+   "expected": [
+    "permits/BP-2026-0418-permit-conditions.md"
+   ],
+   "top5": [
+    "rfis/RFI-019-stair-2-delayed-egress.md",
+    "specs/08-71-00-door-hardware-rev0.md",
+    "specs/08-71-00-door-hardware-rev1.md",
+    "permits/BP-2026-0418-permit-conditions.md",
+    "meetings/OAC-meeting-17-2026-06-10.md"
+   ],
+   "hit@1": false,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 0.25
+  },
+  {
+   "id": "Q08",
+   "kind": "rfi-trace",
+   "query": "Why was delayed egress removed from the Stair 2 door hardware?",
+   "as_of": null,
+   "expected": [
+    "rfis/RFI-019-stair-2-delayed-egress.md",
+    "specs/08-71-00-door-hardware-rev1.md"
+   ],
+   "top5": [
+    "rfis/RFI-019-stair-2-delayed-egress.md",
+    "specs/08-71-00-door-hardware-rev1.md",
+    "submittals/SUB-08-002-door-hardware-schedule.md",
+    "meetings/OAC-meeting-17-2026-06-10.md",
+    "specs/08-71-00-door-hardware-rev0.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0
+  },
+  {
+   "id": "Q09",
+   "kind": "lookup",
+   "query": "What sprinkler heads and piping are required inside the MRI 5-gauss line?",
+   "as_of": null,
+   "expected": [
+    "rfis/RFI-015-sprinkler-heads-mri-suite.md"
+   ],
+   "top5": [
+    "meetings/OAC-meeting-17-2026-06-10.md",
+    "rfis/RFI-015-sprinkler-heads-mri-suite.md",
+    "change-orders/CO-005-mri-suite-sprinkler-and-door-hardware.md",
+    "specs/21-13-13-wet-pipe-sprinkler-rev0.md",
+    "rfis/RFI-011-level-2-slab-vibration-mri.md"
+   ],
+   "hit@1": false,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 0.5
+  },
+  {
+   "id": "Q10",
+   "kind": "lookup",
+   "query": "What is the tenant improvement allowance for Suite 200?",
+   "as_of": null,
+   "expected": [
+    "lease/lease-abstract-suite-200-ardell-imaging.md"
+   ],
+   "top5": [
+    "lease/lease-abstract-suite-200-ardell-imaging.md",
+    "rfis/RFI-011-level-2-slab-vibration-mri.md",
+    "meetings/OAC-meeting-14-2026-04-22.md",
+    "specs/08-71-00-door-hardware-rev0.md",
+    "specs/08-71-00-door-hardware-rev1.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0
+  },
+  {
+   "id": "Q11",
+   "kind": "lookup",
+   "query": "What happens if the landlord misses the outside delivery date for the imaging tenant?",
+   "as_of": null,
+   "expected": [
+    "lease/lease-abstract-suite-200-ardell-imaging.md"
+   ],
+   "top5": [
+    "lease/lease-abstract-suite-200-ardell-imaging.md",
+    "rfis/RFI-011-level-2-slab-vibration-mri.md",
+    "meetings/OAC-meeting-17-2026-06-10.md",
+    "specs/08-71-00-door-hardware-rev0.md",
+    "rfis/RFI-015-sprinkler-heads-mri-suite.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0
+  },
+  {
+   "id": "Q12",
+   "kind": "lookup",
+   "query": "What roof warranty does the lease require the landlord to deliver?",
+   "as_of": null,
+   "expected": [
+    "lease/lease-abstract-suite-200-ardell-imaging.md"
+   ],
+   "top5": [
+    "meetings/OAC-meeting-14-2026-04-22.md",
+    "rfis/RFI-011-level-2-slab-vibration-mri.md",
+    "lease/lease-abstract-suite-200-ardell-imaging.md",
+    "submittals/SUB-07-004-tpo-roofing-product-data.md",
+    "change-orders/CO-003-roof-membrane-upgrade.md"
+   ],
+   "hit@1": false,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 0.3333333333333333
+  },
+  {
+   "id": "Q13",
+   "kind": "lookup",
+   "query": "Why was the first TPO roofing submittal rejected?",
+   "as_of": null,
+   "expected": [
+    "submittals/SUB-07-004-tpo-roofing-product-data.md"
+   ],
+   "top5": [
+    "submittals/SUB-07-004-tpo-roofing-product-data.md",
+    "change-orders/CO-003-roof-membrane-upgrade.md",
+    "specs/07-54-23-tpo-roofing-rev0.md",
+    "rfis/RFI-012-roof-membrane-mechanical-well.md",
+    "specs/07-54-23-tpo-roofing-rev1.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0
+  },
+  {
+   "id": "Q14",
+   "kind": "lookup",
+   "query": "Which mix design was approved for the Level 2 slab?",
+   "as_of": null,
+   "expected": [
+    "submittals/SUB-03-001-concrete-mix-designs.md"
+   ],
+   "top5": [
+    "submittals/SUB-03-001-concrete-mix-designs.md",
+    "rfis/RFI-011-level-2-slab-vibration-mri.md",
+    "specs/03-30-00-cast-in-place-concrete-rev1.md",
+    "change-orders/CO-002-level-2-slab-upgrade.md",
+    "meetings/OAC-meeting-14-2026-04-22.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0
+  },
+  {
+   "id": "Q15",
+   "kind": "lookup",
+   "query": "What is the total of change order CO-005 and what does it cover?",
+   "as_of": null,
+   "expected": [
+    "change-orders/CO-005-mri-suite-sprinkler-and-door-hardware.md"
+   ],
+   "top5": [
+    "meetings/OAC-meeting-17-2026-06-10.md",
+    "change-orders/CO-005-mri-suite-sprinkler-and-door-hardware.md",
+    "rfis/RFI-015-sprinkler-heads-mri-suite.md",
+    "change-orders/CO-003-roof-membrane-upgrade.md",
+    "rfis/RFI-019-stair-2-delayed-egress.md"
+   ],
+   "hit@1": false,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 0.5
+  },
+  {
+   "id": "Q16",
+   "kind": "as_of",
+   "query": "Level 2 elevated slab specified compressive strength",
+   "as_of": "2026-02-15",
+   "expected": [
+    "specs/03-30-00-cast-in-place-concrete-rev0.md"
+   ],
+   "top5": [
+    "specs/03-30-00-cast-in-place-concrete-rev0.md",
+    "permits/BP-2026-0418-permit-conditions.md",
+    "lease/lease-abstract-suite-200-ardell-imaging.md",
+    "rfis/RFI-007-curtain-wall-embeds-slab-edge.md",
+    "specs/08-71-00-door-hardware-rev0.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0,
+   "top1_without_as_of": "specs/03-30-00-cast-in-place-concrete-rev0.md",
+   "hit@1_without_as_of": true
+  },
+  {
+   "id": "Q17",
+   "kind": "as_of",
+   "query": "Level 2 elevated slab specified compressive strength",
+   "as_of": "2026-04-01",
+   "expected": [
+    "specs/03-30-00-cast-in-place-concrete-rev1.md"
+   ],
+   "top5": [
+    "specs/03-30-00-cast-in-place-concrete-rev1.md",
+    "submittals/SUB-03-001-concrete-mix-designs.md",
+    "rfis/RFI-011-level-2-slab-vibration-mri.md",
+    "change-orders/CO-002-level-2-slab-upgrade.md",
+    "permits/BP-2026-0418-permit-conditions.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0,
+   "top1_without_as_of": "specs/03-30-00-cast-in-place-concrete-rev0.md",
+   "hit@1_without_as_of": false
+  },
+  {
+   "id": "Q18",
+   "kind": "as_of",
+   "query": "TPO roof membrane thickness and warranty",
+   "as_of": "2026-04-20",
+   "expected": [
+    "specs/07-54-23-tpo-roofing-rev0.md"
+   ],
+   "top5": [
+    "specs/07-54-23-tpo-roofing-rev0.md",
+    "rfis/RFI-012-roof-membrane-mechanical-well.md",
+    "specs/03-30-00-cast-in-place-concrete-rev1.md",
+    "lease/lease-abstract-suite-200-ardell-imaging.md",
+    "change-orders/CO-002-level-2-slab-upgrade.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0,
+   "top1_without_as_of": "change-orders/CO-003-roof-membrane-upgrade.md",
+   "hit@1_without_as_of": false
+  },
+  {
+   "id": "Q19",
+   "kind": "as_of",
+   "query": "TPO roof membrane thickness and warranty",
+   "as_of": "2026-06-01",
+   "expected": [
+    "specs/07-54-23-tpo-roofing-rev1.md"
+   ],
+   "top5": [
+    "change-orders/CO-003-roof-membrane-upgrade.md",
+    "submittals/SUB-07-004-tpo-roofing-product-data.md",
+    "meetings/OAC-meeting-14-2026-04-22.md",
+    "rfis/RFI-012-roof-membrane-mechanical-well.md",
+    "specs/07-54-23-tpo-roofing-rev1.md"
+   ],
+   "hit@1": false,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 0.2,
+   "top1_without_as_of": "change-orders/CO-003-roof-membrane-upgrade.md",
+   "hit@1_without_as_of": false
+  },
+  {
+   "id": "Q20",
+   "kind": "as_of",
+   "query": "Stair 2 door hardware set HW-5 delayed egress",
+   "as_of": "2026-05-30",
+   "expected": [
+    "specs/08-71-00-door-hardware-rev0.md"
+   ],
+   "top5": [
+    "rfis/RFI-019-stair-2-delayed-egress.md",
+    "specs/08-71-00-door-hardware-rev0.md",
+    "permits/BP-2026-0418-permit-conditions.md",
+    "specs/03-30-00-cast-in-place-concrete-rev1.md",
+    "lease/lease-abstract-suite-200-ardell-imaging.md"
+   ],
+   "hit@1": false,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 0.5,
+   "top1_without_as_of": "rfis/RFI-019-stair-2-delayed-egress.md",
+   "hit@1_without_as_of": false
+  },
+  {
+   "id": "Q21",
+   "kind": "as_of",
+   "query": "construction work hours Saturday",
+   "as_of": "2026-03-01",
+   "expected": [
+    "permits/BP-2026-0418-permit-conditions.md"
+   ],
+   "top5": [
+    "permits/BP-2026-0418-permit-conditions.md",
+    "lease/lease-abstract-suite-200-ardell-imaging.md",
+    "specs/03-30-00-cast-in-place-concrete-rev0.md",
+    "specs/07-54-23-tpo-roofing-rev0.md",
+    "specs/08-71-00-door-hardware-rev0.md"
+   ],
+   "hit@1": true,
+   "hit@5": true,
+   "all@5": true,
+   "rr": 1.0,
+   "top1_without_as_of": "permits/BP-2026-0418-amendment-1-work-hours.md",
+   "hit@1_without_as_of": false
+  }
+ ]
+}

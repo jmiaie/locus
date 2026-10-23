@@ -245,6 +245,27 @@ def _dispatch(request: dict, engine: LocusEngine) -> dict:
         }
 
 
+def resolve_token(token: str | None = None, token_file: str | None = None) -> str | None:
+    """Return the bearer token from *token* or the first line of *token_file*.
+
+    A token file (e.g. a Docker/Compose secret mounted at ``/run/secrets/...``)
+    keeps the token out of the process list and the image.  Giving both, or an
+    empty file, is an error.
+    """
+    if token and token_file:
+        raise ValueError("Pass either a token or a token file, not both")
+    if token_file:
+        try:
+            with open(token_file, encoding="utf-8") as fh:
+                value = fh.readline().strip()
+        except OSError as e:
+            raise ValueError(f"Cannot read token file {token_file!r}: {e.strerror}") from None
+        if not value:
+            raise ValueError(f"Token file {token_file!r} is empty")
+        return value
+    return token or None
+
+
 def make_server(
     engine: LocusEngine,
     host: str = DEFAULT_HOST,
@@ -264,6 +285,22 @@ def make_server(
     return HTTPServer((host, port), handler)
 
 
+def _raise_interrupt(signum, frame):  # pragma: no cover - exercised via the container smoke test
+    raise KeyboardInterrupt
+
+
+def _stop_on_sigterm() -> None:
+    """Treat SIGTERM like Ctrl-C so `docker stop` shuts down cleanly.
+
+    As PID 1 in a container the interpreter ignores SIGTERM unless a handler is
+    installed, which makes `docker stop` wait for its timeout and SIGKILL.
+    """
+    import signal
+    import threading
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, _raise_interrupt)
+
+
 def serve(
     engine: LocusEngine,
     host: str = DEFAULT_HOST,
@@ -273,6 +310,7 @@ def serve(
 ) -> None:
     """Start the HTTP server (blocking)."""
     server = make_server(engine, host=host, port=port, token=token, cors_origin=cors_origin)
+    _stop_on_sigterm()
     logger.info("Locus HTTP server at http://%s:%d", host, port)
     if token:
         logger.info("Auth enabled — Bearer token required")

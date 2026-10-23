@@ -11,3 +11,4 @@ build/
 .pytest_cache/
 *.sqlite3
 .venv/
+deploy/secrets/

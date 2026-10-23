@@ -49,5 +49,9 @@ locus = "locus.mcp.server:cli"
 packages = ["locus"]
 include = ["py.typed"]
 
+[tool.hatch.build.targets.sdist]
+# Keep the sdist (and the offline bundle) small: code, tests, examples, docs that ship with the package.
+include = ["locus", "tests", "examples", "README.md", "LICENSE", "CHANGELOG.md", "pyproject.toml", "py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
