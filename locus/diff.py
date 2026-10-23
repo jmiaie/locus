@@ -44,11 +44,7 @@ class CorpusDiff:
         changed: list[str] = []
         scanned: set[str] = set()
 
-        for f in path.glob(pattern):
-            if not f.is_file():
-                continue
-            if any(ex in f.parts for ex in _EXCLUDE):
-                continue
+        for f in self._corpus.iter_files(path, pattern):
 
             try:
                 rel = str(f.relative_to(path))

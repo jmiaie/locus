@@ -130,9 +130,8 @@ class LocusWatcher:
         added_total = 0
 
         # --- Additions and updates ---
-        for f in self.watch_dir.glob(self.pattern):
-            if any(ex in f.parts for ex in _EXCLUDE):
-                continue
+        files = self.engine.corpus.iter_files(self.watch_dir, self.pattern)
+        for f in files:
             n = self.engine.corpus.add_file(f, base_path=self.watch_dir)
             if n > 0:
                 doc_id = str(f.relative_to(self.watch_dir)).replace("\\", "/")
@@ -147,8 +146,7 @@ class LocusWatcher:
         indexed = set(self.engine.corpus.list_docs())
         current = {
             str(f.relative_to(self.watch_dir)).replace("\\", "/")
-            for f in self.watch_dir.glob(self.pattern)
-            if not any(ex in f.parts for ex in _EXCLUDE)
+            for f in files
         }
         deleted_total = 0
         for removed in indexed - current:

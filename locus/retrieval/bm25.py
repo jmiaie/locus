@@ -33,17 +33,40 @@ class ScoredChunk:
     content: str
     provenance: str
     entities: list[str] = field(default_factory=list)
+    #: Parent retrieval only: the matched child passages inside ``content``,
+    #: best first: ``[{"chunk_id", "start", "end", "score"}]`` (character offsets).
+    spans: list[dict] = field(default_factory=list)
 
 
 class BM25Retriever:
     def __init__(self, corpus: Corpus):
         self.corpus = corpus
 
-    def search(self, query: str, limit: int = 10) -> list[ScoredChunk]:
-        terms = self.corpus.analyze(query)
-        if not terms or limit <= 0:
+    def search(
+        self, query: str, limit: int = 10, expansion: str | None = None, rm3=None,
+    ) -> list[ScoredChunk]:
+        """Top *limit* chunks for *query*.
+
+        expansion: ``None`` (plain BM25) or ``"rm3"`` (pseudo-relevance
+        feedback, see :mod:`locus.retrieval.prf`; *rm3* holds its options).
+        """
+        if limit <= 0:
             return []
-        ranked = self.corpus.search_bm25(terms, limit=limit)
+        if expansion is None:
+            terms = self.corpus.analyze(query)
+            if not terms:
+                return []
+            ranked = self.corpus.search_bm25(terms, limit=limit)
+            provenance = "bm25"
+        elif expansion == "rm3":
+            from .prf import rm3_search
+            ranked = rm3_search(self.corpus, query, limit, rm3)
+            provenance = "bm25+rm3"
+        else:
+            raise ValueError(f"Unknown expansion {expansion!r}; use None or 'rm3'")
+        return self.materialize(ranked, provenance)
+
+    def materialize(self, ranked: list[tuple[str, float]], provenance: str = "bm25") -> list[ScoredChunk]:
         if not ranked:
             return []
         chunks_map = self.corpus.get_chunks_batch([cid for cid, _ in ranked])
@@ -57,7 +80,7 @@ class BM25Retriever:
                         doc_path=chunk.doc_path,
                         score=score,
                         content=chunk.content,
-                        provenance="bm25",
+                        provenance=provenance,
                         entities=chunk.metadata.get("entities", []),
                     )
                 )
