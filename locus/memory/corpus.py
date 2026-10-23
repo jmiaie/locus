@@ -806,14 +806,38 @@ class Corpus:
             if not rowid_of:
                 return {}
             if self.backend == "fts5":
-                rowids = sorted(rowid_of)
-                ph = ",".join("?" * len(rowids))
-                sql = (f"SELECT rowid, -bm25(chunk_fts) FROM chunk_fts "
-                       f"WHERE chunk_fts MATCH ? AND rowid IN ({ph})")
+                # Same formula and statistics as FTS5's bm25(), computed from the
+                # candidates' stored term streams: one query for all candidates
+                # instead of one MATCH per term (which scans whole posting lists).
+                N, avgdl = self._chunk_stats(conn)
+                if N == 0 or avgdl == 0:
+                    return {}
+                idf: dict[str, float] = {}
                 for t in terms:
-                    rows = conn.execute(sql, [_fts_query([t]), *rowids]).fetchall()
-                    if rows:
-                        out[t] = {rowid_of[r]: float(s) for r, s in rows}
+                    row = conn.execute("SELECT doc FROM chunk_fts_row WHERE term = ?", (t,)).fetchone()
+                    if row and row[0]:
+                        v = math.log((N - row[0] + 0.5) / (row[0] + 0.5))
+                        idf[t] = v if v > 0 else 1e-6
+                if not idf:
+                    return {}
+                rowids = sorted(rowid_of)
+                for i in range(0, len(rowids), 900):
+                    part = rowids[i:i + 900]
+                    ph = ",".join("?" * len(part))
+                    for rowid, body in conn.execute(
+                        f"SELECT rowid, body FROM chunk_fts WHERE rowid IN ({ph})", part
+                    ).fetchall():
+                        toks = body.split()
+                        dl = len(toks)
+                        if not dl:
+                            continue
+                        tf: dict[str, int] = {}
+                        for w in toks:
+                            if w in idf:
+                                tf[w] = tf.get(w, 0) + 1
+                        norm = BM25_K1 * (1 - BM25_B + BM25_B * dl / avgdl)
+                        for t, c in tf.items():
+                            out.setdefault(t, {})[rowid_of[rowid]] = idf[t] * c * (BM25_K1 + 1) / (c + norm)
                 return out
             N, avgdl = self._chunk_stats(conn)
             if N == 0 or avgdl == 0:
