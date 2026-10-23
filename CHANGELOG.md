@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — on-prem packaging and a construction demo
+- **Container image.** `Dockerfile` builds a slim image from the local wheel with `pip --no-index`. The base `python:3.12-slim` is pinned by digest. The image runs as non-root uid 10001, works with a read-only rootfs, has a `/health` HEALTHCHECK and stops cleanly on SIGTERM. `deploy/docker-compose.yml` publishes on host loopback only and uses a token secret, `read_only`, `cap_drop: ALL`, `no-new-privileges` and limits.
+- **Offline bundle.** `make offline-bundle` produces a wheel, sdist, `install.sh` and SHA256SUMS in a reproducible tarball. It installs with no network. `make image` / `make image-save` never push anywhere.
+- **`locus serve` options.** `--token-file` / `LOCUS_HTTP_TOKEN_FILE` (Docker secrets), plus `LOCUS_HTTP_HOST`, `LOCUS_HTTP_PORT`, `LOCUS_HTTP_TOKEN` and `LOCUS_STORE` env defaults. SIGTERM is treated as Ctrl-C.
+- **Smoke test.** `scripts/container-smoke-test.sh` makes 24 checks, run with `--network=none`. All 24 passed with podman.
+- **Construction demo.** `examples/construction/` is a synthetic project of 24 documents with 21 labelled questions, covering RFI trace, point-in-time spec and permit queries, KG timeline and citations. R@5 is 0.952 (1.000 on point-in-time questions with the as-of view). The README lists its failures, such as *thickened* vs *thickness*.
+
 ### Changed — default analyzer: Porter stemming + English stop-words
 - **New `porter+english` default analyzer.** Index and query terms are Porter-stemmed with a new pure-stdlib, deterministic stemmer (`locus.memory.stemmer`). A larger English function-word stop list is also applied. It matches SQLite FTS5's `porter` tokenizer on 38,997 of the 38,998 distinct alphabetic words in BEIR SciFact + NFCorpus, so the `fts5` and `legacy` backends still rank identically. No new dependencies.
 - **Other analyzers.** `porter` (stemming only) and `plain` (the previous behaviour) are available through `LocusEngine(analyzer=...)`, `Corpus(analyzer=...)`, `LOCUS_ANALYZER`, `locus reindex --analyzer` and `LocusEngine.reindex(analyzer=...)`.

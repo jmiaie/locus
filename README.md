@@ -585,6 +585,56 @@ pip install "locus-rag[bench]"  # rank_bm25 baseline for benchmarks
 
 **Requirements:** Python 3.11+
 
+### On-prem deployment (container or offline bundle)
+
+Nothing in these targets uploads anything. There is no registry push and no PyPI upload.
+
+```bash
+make offline-bundle      # dist/locus-offline-<ver>.tar.gz: wheel + sdist + install.sh + SHA256SUMS
+make image               # builds locus:local from dist/*.whl (docker, or podman with --format docker)
+make image-save          # dist/locus-image-<ver>.tar for air-gapped hosts (docker/podman load -i …)
+scripts/container-smoke-test.sh locus:local   # 24 checks, no network needed
+```
+
+**Offline bundle.** Copy the tarball to the target host and run `tar xzf locus-offline-*.tar.gz`. Then run
+`./locus-offline-*/install.sh /path/to/venv/bin/python`. It checks the checksums and installs with
+`pip --no-index`, which works because Locus has no runtime dependencies.
+
+**Image.** Based on `python:3.12-slim`, pinned by digest, about 124 MB. It:
+- runs as uid 10001;
+- works with a read-only root filesystem;
+- has a HEALTHCHECK on `/health`;
+- stops cleanly on SIGTERM.
+
+The index lives in `/data` (a volume). Mount source documents read-only at `/docs`.
+
+**HTTP binding.** HTTP binds `127.0.0.1` inside the container by default, so a published port is unreachable.
+For local use, use `docker exec` or MCP stdio (`docker run -i --rm -v locus-data:/data locus:local mcp`).
+For remote use:
+- set `LOCUS_HTTP_HOST=0.0.0.0`;
+- provide the bearer token as a file or secret through `LOCUS_HTTP_TOKEN_FILE`;
+- publish the port on the host loopback only, and put TLS in front of it.
+
+Locus refuses to bind a non-loopback address without a token. [`deploy/docker-compose.yml`](deploy/docker-compose.yml)
+sets all of this up with a Compose secret, `read_only`, `cap_drop: [ALL]`, `no-new-privileges` and memory/pid limits.
+
+The smoke test checks the following with `--network=none`:
+- the non-root user and the healthcheck;
+- indexing and retrieval on a read-only rootfs;
+- MCP stdio;
+- that the loopback-bound port is unreachable from the host;
+- the refusal to start without a token;
+- 401/403 on a missing or wrong token or a foreign `Origin`;
+- that the token does not appear in logs or config;
+- clean stop;
+- installing the offline bundle.
+
+**Construction demo.** [`examples/construction/`](examples/construction/) has 24 **synthetic** project documents:
+specs with revisions, RFIs, submittals, change orders, permits, a lease and OAC minutes. It also has 21
+labelled questions (`python examples/construction/demo.py`). Results are R@5 0.952 overall, and 1.000 on
+the point-in-time questions when the as-of view is used. They come from a small fictional set; treat them as a
+workflow demo, not a benchmark.
+
 ---
 
 ## Contributing

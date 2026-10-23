@@ -2,6 +2,8 @@
 PYTHON  ?= python3
 IMAGE   ?= locus:local
 ENGINE  ?= $(shell command -v docker >/dev/null 2>&1 && echo docker || echo podman)
+# podman/buildah default to OCI images, which drop HEALTHCHECK; build Docker-format images.
+BUILD_FMT := $(if $(filter podman,$(notdir $(ENGINE))),--format docker,)
 VERSION := $(shell $(PYTHON) -c "import re,pathlib;print(re.search(r'^version\s*=\s*\"([^\"]+)\"',pathlib.Path('pyproject.toml').read_text(),re.M).group(1))")
 BUNDLE  := locus-offline-$(VERSION)
 
@@ -31,7 +33,7 @@ offline-bundle: dist
 
 ## image: build the container image locally from dist/*.whl (never pushed)
 image: dist
-	$(ENGINE) build -t $(IMAGE) .
+	$(ENGINE) build $(BUILD_FMT) -t $(IMAGE) .
 
 ## image-save: export the image for air-gapped hosts (docker/podman load -i ...)
 image-save: image
