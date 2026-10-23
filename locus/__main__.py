@@ -8,6 +8,22 @@ import os
 import sys
 
 
+def _cli_filters(args) -> dict | None:
+    """Build a filters dict from `locus retrieve` flags (None when no filter is set)."""
+    f: dict = json.loads(args.filters) if args.filters else {}
+    for key, val in (("path", args.path), ("exclude_path", args.exclude_path), ("type", args.doc_type),
+                     ("tags", args.tag), ("tags_any", args.any_tag), ("date_from", args.date_from),
+                     ("date_to", args.date_to), ("as_of", args.in_force)):
+        if val:
+            f[key] = val
+    for item in args.meta or []:
+        name, sep, value = item.partition("=")
+        if not sep or not name:
+            raise SystemExit(f"--meta expects FIELD=VALUE, got {item!r}")
+        f.setdefault("meta", {})[name.strip()] = value.strip()
+    return f or None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="locus",
@@ -35,6 +51,22 @@ def main() -> None:
     p_ret.add_argument("--track", action="store_true",
                        help="Record hits in the hot-context bulletin")
     p_ret.add_argument("--raw", action="store_true", help="Output JSON")
+    g = p_ret.add_argument_group("metadata filters (applied to the source document)")
+    g.add_argument("--path", action="append", default=None, metavar="GLOB",
+                   help="Only docs whose path matches GLOB (repeatable: any)")
+    g.add_argument("--exclude-path", action="append", default=None, metavar="GLOB")
+    g.add_argument("--type", dest="doc_type", action="append", default=None,
+                   help="Frontmatter `type` (repeatable: any)")
+    g.add_argument("--tag", action="append", default=None, help="Doc must have this tag (repeatable: all)")
+    g.add_argument("--any-tag", action="append", default=None, help="Doc has any of these tags (repeatable)")
+    g.add_argument("--date-from", default=None, metavar="YYYY-MM-DD", help="Frontmatter `date` >= this")
+    g.add_argument("--date-to", default=None, metavar="YYYY-MM-DD", help="Frontmatter `date` <= this")
+    g.add_argument("--in-force", dest="in_force", default=None, metavar="YYYY-MM-DD",
+                   help="Docs in force on this date (effective/date <= it, not superseded)")
+    g.add_argument("--meta", action="append", default=None, metavar="FIELD=VALUE",
+                   help="Frontmatter field equals value (repeatable: all)")
+    g.add_argument("--filters", default=None, metavar="JSON",
+                   help='Full filter object, e.g. \'{"type": "rfi", "meta": {"status": "Closed"}}\'')
 
     p_reindex = sub.add_parser("reindex", help="Rebuild the lexical index from stored chunks")
     p_reindex.add_argument("--backend", choices=["fts5", "legacy"], default=None)
@@ -280,6 +312,7 @@ def main() -> None:
             use_links=not args.no_links,
             mode=args.mode,
             track=args.track,
+            filters=_cli_filters(args),
         )
         if args.raw:
             print(json.dumps([

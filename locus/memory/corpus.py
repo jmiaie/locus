@@ -650,6 +650,51 @@ class Corpus:
                         out[r[1]] = self._row_to_chunk(r)
         return out
 
+    def doc_frontmatter(self, doc_paths: list[str]) -> dict[str, dict]:
+        """Frontmatter of each document (from its first chunk), cached per write generation."""
+        cache = getattr(self, "_fm_cache", None)
+        if cache is None or cache[0] != self.generation:
+            cache = (self.generation, {})
+            self._fm_cache = cache
+        store = cache[1]
+        missing = [p for p in dict.fromkeys(doc_paths) if p not in store]
+        if missing:
+            for p, ch in self.first_chunks(missing).items():
+                store[p] = dict(ch.metadata.get("frontmatter") or {})
+            for p in missing:
+                store.setdefault(p, {})
+        return {p: store[p] for p in doc_paths}
+
+    def supersedes_index(self) -> dict[str, list[dict]]:
+        """``{superseded doc_path: [frontmatter of each doc that supersedes it]}`` (cached).
+
+        Built from every document's ``supersedes`` frontmatter field (a doc
+        path, or several separated by commas).
+        """
+        cache = getattr(self, "_sup_cache", None)
+        if cache is not None and cache[0] == self.generation:
+            return cache[1]
+        index: dict[str, list[dict]] = {}
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT doc_path, metadata FROM chunks ORDER BY doc_path, start_word, rowid"
+            ).fetchall()
+        seen: set[str] = set()
+        for doc_path, meta in rows:
+            if doc_path in seen:
+                continue
+            seen.add(doc_path)
+            try:
+                fm = json.loads(meta or "{}").get("frontmatter") or {}
+            except ValueError:
+                fm = {}
+            for target in str(fm.get("supersedes") or "").split(","):
+                target = target.strip().strip("'\"")
+                if target:
+                    index.setdefault(target, []).append(fm)
+        self._sup_cache = (self.generation, index)
+        return index
+
     def iter_chunk_links(self):
         """Yield the ``links`` metadata list of every chunk (one query)."""
         with self._conn() as conn:
