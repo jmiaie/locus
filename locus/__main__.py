@@ -64,6 +64,11 @@ def main() -> None:
     p_ret.add_argument("--raw", action="store_true", help="Output JSON")
     p_ret.add_argument("--expand", choices=["rm3"], default=None,
                        help="LLM-free query expansion: RM3 pseudo-relevance feedback")
+    p_ret.add_argument("--rerank", action="store_true",
+                       help='Rerank with a local cross-encoder (needs pip install "locus[rerank]"; '
+                            "downloads the model on first use)")
+    p_ret.add_argument("--rerank-depth", type=int, default=50, help="Candidates to rerank (default 50)")
+    p_ret.add_argument("--rerank-model", default=None, help="Cross-encoder model (default ms-marco-MiniLM-L-6-v2)")
     p_ret.add_argument("--parent", choices=["section", "doc"], default=None,
                        help="Return the enclosing section/document of matched chunks, with cited spans")
     p_ret.add_argument("--llm", choices=["rewrite", "multi", "hyde"], default=None,
@@ -325,7 +330,11 @@ def main() -> None:
     follow = None
     if args.cmd == "index" and args.follow_symlinks:
         follow = {"no": False, "inside": "inside", "all": True}[args.follow_symlinks]
-    engine = LocusEngine(store_path=args.store, chunking=chunking, follow_symlinks=follow)
+    reranker = None
+    if args.cmd == "retrieve" and args.rerank:
+        from .rerank import DEFAULT_MODEL, CrossEncoderReranker
+        reranker = CrossEncoderReranker(model=args.rerank_model or DEFAULT_MODEL, depth=args.rerank_depth)
+    engine = LocusEngine(store_path=args.store, chunking=chunking, follow_symlinks=follow, reranker=reranker)
 
     # ----------------------------------------------------------------
     # Engine commands
