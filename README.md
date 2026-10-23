@@ -229,7 +229,19 @@ All storage is SQLite — no external databases, no servers, no configuration.
 - **Optional hybrid re-rank** — KG, link walk, structural, recency and link popularity over the BM25 candidates, fused via weighted RRF (`mode="hybrid"`)
 - **Incremental indexing** — changed files replace their chunks, postings and auto-extracted KG triples in place; `forget` removes them; `add_fact` facts are never touched
 - **Deterministic, read-only retrieval** — ties broken by index order; nothing is written unless `track=True`
-- **Section-aware chunking** — splits at `#` heading boundaries; long sections fall back to word-count
+- **Section-aware chunking**
+  - Splits at `#` heading boundaries; long sections fall back to word windows (400 words, 50 overlap).
+  - Opt-in options (stored with the index):
+    - `chunk_words` / `overlap_words` set the window size and overlap.
+    - `heading_context` prefixes every window with its heading path (`Spec > 3.1 > Slabs`).
+    - `boundaries="lines"` ends windows at line or paragraph breaks.
+  - See [Chunking, parent-child and RM3](#chunking-parent-child-retrieval-and-rm3-opt-in).
+- **Parent-child retrieval** (`retrieve(..., parent="section"|"doc")`) — matches small chunks, then returns the enclosing section or document. Each result's `spans` cite the matched passages by character offset. Opt-in.
+- **RM3 query expansion** (`retrieve(..., expansion="rm3")`) — LLM-free pseudo-relevance feedback. Opt-in.
+  - NFCorpus: +0.014 nDCG@10 (significant).
+  - Neutral elsewhere.
+  - About 5–10× BM25 latency.
+- **Symlink-safe indexing** — directory indexing skips symlinks by default, so it never reads outside the indexed tree. Opt in with `follow_symlinks="inside"` or `True` (equivalently `--follow-symlinks inside|all`, or `LOCUS_FOLLOW_SYMLINKS`).
 - **Temporal retrieval** — `as_of="2024-01-01"` returns only facts valid on that date
 - **Query intent routing** (hybrid) — auto-classifies `kg_first` / `bm25_first` / `balanced` and shifts re-rank weights
 - **Checksum dedup** — unchanged files never re-indexed; safe to run `index` on every startup
@@ -308,6 +320,29 @@ How filters behave:
 - A document that is missing a field the filter needs does not match.
 
 Invalid keys, operators or dates raise `ValueError`. MCP returns that as an `error`.
+
+### Chunking, parent-child retrieval and RM3 (opt-in)
+
+```python
+engine = LocusEngine(".locus", chunking={"chunk_words": 200, "overlap_words": 0,
+                                         "heading_context": True, "boundaries": "lines"})
+engine.index("docs/")            # chunking is stored with the index; changing it re-chunks on the next index()
+hits = engine.retrieve("slab strength", parent="section")   # enclosing sections, best chunk's score
+hits[0].spans   # [{"chunk_id": ..., "start": 120, "end": 410, "score": 8.1}, ...] offsets into hits[0].content
+engine.retrieve("statin muscle pain", expansion="rm3", rm3={"fb_docs": 10, "fb_terms": 20, "orig_weight": 0.9})
+```
+
+```bash
+locus index docs/ --chunk-words 200 --overlap-words 0 --heading-context --boundaries lines
+locus retrieve "slab strength" --parent section --expand rm3 --raw
+```
+
+All three are measured against the current default in [docs/COMPARISON.md](docs/COMPARISON.md#rag-feature-pack-2026-10-23).
+Settings were tuned on dev splits only. None was significantly better without a large latency cost, so all three stay opt-in:
+
+- **Chunking options:** no significant change on the BEIR test splits. On LongMemEval R@5 they are slightly worse (not significant).
+- **Parent-child retrieval:** worth using for *what it returns*: a full section with cited spans instead of a fragment. With 100-word children it is significantly worse on LongMemEval R@5 (−0.017).
+- **RM3:** significantly better on NFCorpus (+0.0136 nDCG@10) and neutral on SciFact, LongMemEval and the construction demo. It costs 5–10× BM25 latency, roughly 10–20 ms instead of 2–3 ms.
 
 ### LLM query transformations (optional)
 
@@ -416,8 +451,8 @@ locus [--store PATH] COMMAND [args]
 
 | Command | Description |
 |:---|:---|
-| `index <path>` | Index files; `--pattern **/*.md` |
-| `retrieve <query>` | Retrieve; `--limit 5 --mode bm25\|hybrid --as-of 2024-01-01 --track --raw`; filters `--path --exclude-path --type --tag --any-tag --date-from --date-to --in-force --meta K=V --filters JSON`; `--llm rewrite\|multi\|hyde` (optional, network) |
+| `index <path>` | Index files; `--pattern **/*.md`; chunking `--chunk-words --overlap-words --heading-context --boundaries words\|lines`; `--follow-symlinks no\|inside\|all` (default no) |
+| `retrieve <query>` | Retrieve; `--limit 5 --mode bm25\|hybrid --as-of 2024-01-01 --track --raw`; filters `--path --exclude-path --type --tag --any-tag --date-from --date-to --in-force --meta K=V --filters JSON`; `--expand rm3`; `--parent section\|doc`; `--llm rewrite\|multi\|hyde` (optional, network) |
 | `explain <chunk_id>` | Explain retrieval; `--query "..."` |
 | `status` | Corpus + KG + bulletin + budget stats |
 | `session-start` | Warm context open |

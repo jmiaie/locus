@@ -251,8 +251,42 @@ The CPU-only torch wheel would shrink the semantic installs, but the default `pi
 |---|---|---|---|
 | Metadata filtering (path glob, type, tags, date range, `as_of` with `supersedes`, custom fields) in API / CLI / MCP | shipped | always available (no filter = unchanged results) | correctness-tested only; filters never change scores |
 | LLM query rewriting / multi-query (RRF) / HyDE via any OpenAI-compatible endpoint | shipped as optional plugin (`locus.llm`) | opt-in | **pending**: no API key was available, so it has not been benchmarked |
+| Structure-aware chunking options (size/overlap, heading-path context, line/paragraph boundaries) | shipped | opt-in | no significant gain; see below |
+| Parent-child retrieval (`parent="section"\|"doc"`, cited spans) | shipped | opt-in | LME R@5 significantly worse with 100-word children; the value is the returned context |
+| RM3 pseudo-relevance feedback (`expansion="rm3"`) | shipped | opt-in | NFCorpus +0.0136 (significant); neutral elsewhere; 5–10× latency |
+| Symlink-safe indexing (skip symlinks by default; `inside` / `all` opt-in) | shipped (bug fix) | **default** | correctness-tested |
 
 Comparison with other systems' filtering:
 - **Chroma** and **LlamaIndex** offer metadata filters on user-supplied metadata.
 - **mem0** filters on user, agent and run ids plus metadata.
 - **Locus** reads its filter fields from document frontmatter. It adds a point-in-time view that understands `supersedes` chains; we did not find this in the other systems' docs.
+
+### Pack 2/3: chunking, parent-child, RM3 (measured 2026-10-23)
+
+**Method:**
+- **Baseline:** the current default — `porter+english` analyzer, 400/50 section-aware chunking, BM25 mode.
+- **Tuning:** dev splits only (SciFact train qrels, NFCorpus dev). The chosen settings were then run once on test.
+- **Metrics:** SciFact/NFCorpus nDCG@10 (test), LongMemEval-S R@5 (n=470) and the synthetic construction demo R@5 (n=21).
+- **Statistics:** a 95% bootstrap CI for each value, plus a paired bootstrap on the difference vs the baseline (B=10000, seed 20261020).
+- **Latency:** p50 over all queries, as a ratio to the baseline in the same harness.
+
+Raw summary: `benchmarks/published/2026-10-23-ragpack/summary.json`.
+
+| Config (dev-selected) | SciFact nDCG@10 | NFCorpus nDCG@10 | LME R@5 | Construction R@5 | p50 latency vs base |
+|---|---|---|---|---|---|
+| **Baseline (default)** | 0.6810 [0.6379, 0.7235] | 0.3286 [0.2941, 0.3637] | 0.9766 [0.9617, 0.9894] | 0.952 [0.857, 1.000] | 1× (3.1 / 1.6 / 2.0 ms) |
+| Chunking 200/0 + heading context | 0.6905 (+0.0095 [−0.0006, +0.0203], ns) | 0.3248 (−0.0038 [−0.0086, +0.0010], ns) | 0.9681 (−0.0085 [−0.0191, 0.0000], ns) | 1.000 (+0.048, ns) | 0.97–1.06× |
+| Chunking 400/50 + heading context + line boundaries | 0.6806 (−0.0004, ns) | 0.3286 (−0.0001, ns) | 0.9723 (−0.0043 [−0.0106, 0.0000], ns) | 1.000 (+0.048, ns) | ~1.0× |
+| Parent-child, 100-word children, `parent="doc"` | 0.6835 (+0.0024 [−0.0110, +0.0161], ns) | 0.3237 (−0.0049 [−0.0113, +0.0013], ns) | 0.9596 (**−0.0170 [−0.0340, −0.0021], sig.**) | 1.000 (+0.048, ns) | 0.96–1.25× (2.2× on the 24-doc demo) |
+| RM3 (fb_docs 10, fb_terms 20, orig_weight 0.9) | 0.6815 (+0.0005 [−0.0072, +0.0081], ns) | 0.3423 (**+0.0136 [+0.0072, +0.0213], sig.**) | 0.9745 (−0.0021, ns) | 0.952 (±0) | **5.1–9.6×** (20 / 15 / 10 ms) |
+
+**Dev tuning:**
+- **Chunking:** a grid of 100/200 words × overlap {0, 25%} × heading context. Smaller windows without heading context were significantly worse on SciFact dev (−0.017). 200/0 with heading context was best (+0.0049 / +0.0003, ns).
+- **RM3:** a grid of fb_docs {5, 10} × fb_terms {10, 20} × orig_weight {0.5, 0.7, 0.9}. orig_weight 0.5 hurt SciFact dev significantly (−0.03), while every setting helped NFCorpus dev significantly (+0.012 to +0.018). The best dev mean was 10/20/0.9.
+
+**Decision.** All three ship opt-in.
+- No configuration is significantly better on more than one benchmark.
+- RM3's one significant win (NFCorpus) costs 5–10× latency.
+- Parent-child's doc-level ranking equals small-chunk retrieval, which is worse on LongMemEval. Use it for the larger, cited context it returns, not for ranking quality.
+
+The construction demo has n=21, so a +1-question change is within noise.

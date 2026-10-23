@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — chunking options, parent-child retrieval, RM3 (all opt-in; see docs/COMPARISON.md)
+- **Chunking options.** `LocusEngine(chunking={...})` / `locus index --chunk-words --overlap-words --heading-context --boundaries` / `LOCUS_CHUNKING`. The settings are stored with the index, and changing them re-chunks on the next `index()`. With no options set, chunks are byte-identical to before.
+- **Parent sections.** Sections are stored as parents. `retrieve(..., parent="section"|"doc")` returns the enclosing section or document, with cited character `spans`.
+- **RM3 expansion.** `retrieve(..., expansion="rm3", rm3={...})` (`--expand rm3`, MCP `expansion`) adds RM3 pseudo-relevance feedback. It is pure standard library and deterministic, and gives the same rankings on the fts5 and legacy backends. `Corpus.score_terms()` is new.
+- **Reranker hook.** `LocusEngine(reranker=...)` adds a generic second-stage reranker hook, with a `retrieve(..., rerank=)` toggle.
+
+### Fixed
+- **Symlinks.** Directory indexing (and `watch`/`diff`) no longer follows symlinks by default, so files outside the indexed tree are never read. `follow_symlinks="inside"` follows only links that resolve inside the root, and `True` restores the old behaviour. The setting is also available as `--follow-symlinks no|inside|all` and `LOCUS_FOLLOW_SYMLINKS`.
+
 ### Added — metadata filters and optional LLM query transformations
 - **`retrieve(..., filters=...)`.** Filters by path glob (include/exclude), frontmatter `type`, tags (all/any), `date` range, point-in-time `as_of` (honours `supersedes`) and custom frontmatter fields (`eq ne in nin gt gte lt lte contains exists`). Available in the API, the CLI (`--path --exclude-path --type --tag --any-tag --date-from --date-to --in-force --meta --filters`) and the `locus_retrieve` MCP tool (`filters`). Filtering happens after ranking with a deepening candidate pool, so scores are unchanged and up to `limit` matches are returned whenever they exist. `LocusEngine.filter_matches()` and `Corpus.doc_frontmatter()` / `supersedes_index()` are new helpers.
 - **`locus.llm`.** Provider-agnostic `rewrite`, `multi` (RRF) and `hyde` query transformations over any OpenAI-compatible endpoint (`OPENROUTER_API_KEY`, or `OPENAI_API_KEY` + `OPENAI_BASE_URL`). Standard library only, with usage accounting, a token cap and memoisation. Available as `locus retrieve --llm`. It is opt-in and never imported by the core. Tested with a mock transport; the quality benchmark is pending until an API key is available.
