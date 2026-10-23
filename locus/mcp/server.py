@@ -122,6 +122,7 @@ def _call_tool(name: str, arguments: dict, engine: LocusEngine | None = None) ->
                 intent=intent,
                 mode=arguments.get("mode"),
                 track=bool(arguments.get("track", True)),
+                filters=arguments.get("filters") or None,
             )
             return {
                 "intent": intent.value if intent else "auto",

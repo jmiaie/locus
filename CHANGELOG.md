@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — metadata filters and optional LLM query transformations
+- **`retrieve(..., filters=...)`.** Filters by path glob (include/exclude), frontmatter `type`, tags (all/any), `date` range, point-in-time `as_of` (honours `supersedes`) and custom frontmatter fields (`eq ne in nin gt gte lt lte contains exists`). Available in the API, the CLI (`--path --exclude-path --type --tag --any-tag --date-from --date-to --in-force --meta --filters`) and the `locus_retrieve` MCP tool (`filters`). Filtering happens after ranking with a deepening candidate pool, so scores are unchanged and up to `limit` matches are returned whenever they exist. `LocusEngine.filter_matches()` and `Corpus.doc_frontmatter()` / `supersedes_index()` are new helpers.
+- **`locus.llm`.** Provider-agnostic `rewrite`, `multi` (RRF) and `hyde` query transformations over any OpenAI-compatible endpoint (`OPENROUTER_API_KEY`, or `OPENAI_API_KEY` + `OPENAI_BASE_URL`). Standard library only, with usage accounting, a token cap and memoisation. Available as `locus retrieve --llm`. It is opt-in and never imported by the core. Tested with a mock transport; the quality benchmark is pending until an API key is available.
+
 ### Added — on-prem packaging and a construction demo
 - **Container image.** `Dockerfile` builds a slim image from the local wheel with `pip --no-index`. The base `python:3.12-slim` is pinned by digest. The image runs as non-root uid 10001, works with a read-only rootfs, has a `/health` HEALTHCHECK and stops cleanly on SIGTERM. `deploy/docker-compose.yml` publishes on host loopback only and uses a token secret, `read_only`, `cap_drop: ALL`, `no-new-privileges` and limits.
 - **Offline bundle.** `make offline-bundle` produces a wheel, sdist, `install.sh` and SHA256SUMS in a reproducible tarball. It installs with no network. `make image` / `make image-save` never push anywhere.

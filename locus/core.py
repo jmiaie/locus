@@ -42,6 +42,7 @@ from .retrieval.link_popularity import LinkPopularityRetriever
 from .retrieval.reranker import LocusReranker, RerankerWeights
 from .context.packer import ContextPacker, PackedContext
 from .retrieval.fusion import rrf_fuse
+from .retrieval.filters import MetadataFilter
 from .retrieval.classifier import classify_query, INTENT_WEIGHTS, QueryIntent
 from .retrieval.streaming import StreamingConfig, StreamingRetriever
 from .context.bulletin import ContextBulletin
@@ -234,9 +235,16 @@ class LocusEngine:
         mode: str | None = None,
         track: bool = False,
         signals: tuple[str, ...] | list[str] | None = None,
+        filters: "MetadataFilter | dict | None" = None,
     ) -> list[ScoredChunk]:
         """
         Retrieve the top *limit* chunks for *query*.
+
+        filters: restrict results by document metadata: path glob, type, tags,
+        date range, point-in-time ``as_of`` (respects ``supersedes``) and custom
+        frontmatter fields; see :mod:`locus.retrieval.filters`.  Applied after
+        ranking with a deepening candidate pool, so scores are unchanged and up
+        to *limit* matches are always returned when they exist.
 
         mode:
           - ``"bm25"``   — BM25 only (default; see module docstring).
@@ -267,13 +275,14 @@ class LocusEngine:
         sig = tuple(RERANK_SIGNALS if signals is None else [s for s in RERANK_SIGNALS if s in signals])
         if not use_links:
             sig = tuple(s for s in sig if s != "links")
+        mfilter = MetadataFilter.from_value(filters)
 
         key = None
         fused: list[ScoredChunk] | None = None
         if use_cache:
             key = self._cache_key(
                 query, limit, as_of, use_links, intent.value if intent else "-", mode, sig,
-            )
+            ) + (("|f:" + mfilter.key()) if mfilter else "")
             if key in self._query_cache:
                 self._cache_hits += 1
                 fused = self._query_cache[key]
@@ -283,9 +292,12 @@ class LocusEngine:
         if fused is None:
             self._fire("pre_retrieve", query=query, limit=limit)
             if mode == "bm25":
-                fused = self._bm25.search(query, limit=limit)
+                def fetch(n: int) -> list[ScoredChunk]:
+                    return self._bm25.search(query, limit=n)
             else:
-                fused = self._hybrid(query, limit=limit, as_of=as_of, intent=intent, signals=sig)
+                def fetch(n: int) -> list[ScoredChunk]:
+                    return self._hybrid(query, limit=n, as_of=as_of, intent=intent, signals=sig)
+            fused = self._apply_filter(fetch, limit, mfilter) if mfilter else fetch(limit)
             if use_cache:
                 if len(self._query_cache) >= _CACHE_MAX_SIZE:
                     oldest = next(iter(self._query_cache))
@@ -296,6 +308,31 @@ class LocusEngine:
         if track:
             self._track(fused, label=mode)
         return list(fused)
+
+    def filter_matches(self, doc_paths: list[str], filters: "MetadataFilter | dict | None") -> dict[str, bool]:
+        """``{doc_path: passes}`` for *filters* (see :mod:`locus.retrieval.filters`)."""
+        f = MetadataFilter.from_value(filters)
+        if f is None:
+            return {p: True for p in doc_paths}
+        fms = self.corpus.doc_frontmatter(list(doc_paths))
+        sup = self.corpus.supersedes_index() if f.as_of else {}
+        return {p: f.matches(p, fms.get(p, {}), lambda q: sup.get(q, ())) for p in fms}
+
+    def _apply_filter(self, fetch, limit: int, f: MetadataFilter) -> list[ScoredChunk]:
+        """Filter ranked results, deepening the pool until *limit* pass or none are left."""
+        if limit <= 0:
+            return []
+        depth = max(limit * 4, 50)
+        verdict: dict[str, bool] = {}
+        while True:
+            ranked = fetch(depth)
+            new = [c.doc_path for c in ranked if c.doc_path not in verdict]
+            if new:
+                verdict.update(self.filter_matches(new, f))
+            kept = [c for c in ranked if verdict.get(c.doc_path)]
+            if len(kept) >= limit or len(ranked) < depth:
+                return kept[:limit]
+            depth *= 4
 
     def _track(self, chunks: list[ScoredChunk], label: str = "") -> None:
         """Record retrieved chunks in the bulletin and token budget (writes)."""

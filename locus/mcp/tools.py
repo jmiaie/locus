@@ -47,6 +47,27 @@ TOOLS: dict[str, dict] = {
                     "type": "boolean", "default": True,
                     "description": "Record hits in the hot-context bulletin (set false for a pure read).",
                 },
+                "filters": {
+                    "type": "object",
+                    "description": (
+                        "Restrict results by source-document metadata. Keys: path / exclude_path (glob or list), "
+                        "type (str or list), tags (all of), tags_any (any of), date_from / date_to (YYYY-MM-DD on "
+                        "frontmatter `date`), as_of (in force on that date; honours `supersedes`), meta "
+                        "({field: value} or {field: {op: value}}, ops eq ne in nin gt gte lt lte contains exists)."
+                    ),
+                    "properties": {
+                        "path": {"type": ["string", "array"], "items": {"type": "string"}},
+                        "exclude_path": {"type": ["string", "array"], "items": {"type": "string"}},
+                        "type": {"type": ["string", "array"], "items": {"type": "string"}},
+                        "tags": {"type": "array", "items": {"type": "string"}},
+                        "tags_any": {"type": "array", "items": {"type": "string"}},
+                        "date_from": {"type": "string"},
+                        "date_to": {"type": "string"},
+                        "as_of": {"type": "string"},
+                        "meta": {"type": "object"},
+                    },
+                    "additionalProperties": False,
+                },
                 "store_path": {"type": "string", "default": ".locus"},
             },
             "required": ["query"],
