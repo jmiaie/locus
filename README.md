@@ -233,6 +233,14 @@ All storage is SQLite — no external databases, no servers, no configuration.
 - **Temporal retrieval** — `as_of="2024-01-01"` returns only facts valid on that date
 - **Query intent routing** (hybrid) — auto-classifies `kg_first` / `bm25_first` / `balanced` and shifts re-rank weights
 - **Checksum dedup** — unchanged files never re-indexed; safe to run `index` on every startup
+- **Metadata filters** — restrict results by path glob, frontmatter `type`, tags (all/any), `date` range,
+  point-in-time `as_of` (honours `supersedes`) and any frontmatter field (`eq ne in nin gt gte lt lte contains exists`).
+  Available in the API (`retrieve(..., filters={...})`), the CLI (`--path --type --tag --date-from --in-force --meta`)
+  and the `locus_retrieve` MCP tool (`filters`). Filters never change scores, and the candidate pool deepens until `limit`
+  matches are found. See [Metadata filters](#metadata-filters).
+- **Optional LLM query rewriting** — `rewrite`, `multi` (RRF merge) and HyDE through any OpenAI-compatible
+  endpoint (`locus.llm`, `locus retrieve --llm multi`). Off by default and never imported by the core.
+  Benchmark: **pending**, since no API key was available. See [LLM query transformations](#llm-query-transformations-optional).
 
 ### Knowledge Graph
 - **Prose triple extraction** — 14 relation patterns (`leads`, `works_at`, `is_a`, `part_of`, `replaced`, `depends_on`...) auto-run during indexing — no annotation required
@@ -273,6 +281,60 @@ This is structurally impossible with vector search. No cosine score has a "why."
 - **Multi-node cluster** — cross-corpus RRF fusion with node-prefixed provenance (`jarv:bm25`)
 - **OMPA bridge** — imports OMPA vaults (markdown + KG triples; OMPA's `source_file` maps to Locus `source`)
 - **Evaluation** — `locus benchmark qa.json` measures Recall@K and MRR
+
+### Metadata filters
+
+```python
+engine.retrieve("slab concrete strength", filters={
+    "path": ["specs/*", "rfis/*"],          # glob(s) on the document path (any)
+    "exclude_path": "*/archive/*",
+    "type": "spec",                          # frontmatter `type` (any of; case-insensitive)
+    "tags": ["concrete"], "tags_any": ["mri", "vibration"],
+    "date_from": "2026-01-01", "date_to": "2026-06-30",   # frontmatter `date`, inclusive
+    "as_of": "2026-02-15",                   # in force on that date: effective/date <= it, not superseded
+    "meta": {"status": "Closed", "revision": {"gte": 1}, "spec_section": {"in": ["03 30 00"]}},
+})
+```
+
+```bash
+locus retrieve "slab concrete" --type spec --in-force 2026-02-15 --meta "spec_section=03 30 00"
+locus retrieve "roof" --filters '{"path": "change-orders/*", "meta": {"status": {"ne": "Void"}}}'
+```
+
+How filters behave:
+- They act on the source document's path and frontmatter.
+- Tags may be `a, b`, `[a, b]` or `#a #b`. They are split on commas and whitespace.
+- Dates compare as ISO strings.
+- A document that is missing a field the filter needs does not match.
+
+Invalid keys, operators or dates raise `ValueError`. MCP returns that as an `error`.
+
+### LLM query transformations (optional)
+
+```python
+from locus.llm import OpenAICompatibleClient, llm_retrieve
+client = OpenAICompatibleClient.from_env()   # OPENROUTER_API_KEY, or OPENAI_API_KEY (+ OPENAI_BASE_URL)
+hits = llm_retrieve(engine, "why is the L2 slab thicker?", strategy="multi", client=client, limit=5)
+client.usage   # {'calls': 1, 'prompt_tokens': ..., 'completion_tokens': ...}
+```
+
+| Strategy | What it sends |
+|---|---|
+| `rewrite` | One keyword-style rewrite of the query |
+| `multi` | 3 alternative queries |
+| `hyde` | A short hypothetical answer passage, used as the query |
+
+The original query is always retrieved too, and the lists are merged with RRF (k=60), so a bad rewrite cannot drop the original hits.
+
+**Configuration and safeguards:**
+- Calls use temperature 0 and are memoised per client.
+- `LOCUS_LLM_MODEL` picks the model.
+- `LOCUS_LLM_MAX_TOKENS_TOTAL` caps the total tokens per client.
+- Works with any OpenAI-compatible server, including local ones (vLLM, llama.cpp, Ollama).
+- The core never imports `locus.llm` and makes no network calls.
+
+**Quality is not measured yet.** No API key was available on the benchmark machine, so the benchmark is pending.
+The code is covered by mock-transport unit tests only.
 
 ---
 
@@ -355,7 +417,7 @@ locus [--store PATH] COMMAND [args]
 | Command | Description |
 |:---|:---|
 | `index <path>` | Index files; `--pattern **/*.md` |
-| `retrieve <query>` | Retrieve; `--limit 5 --mode bm25\|hybrid --as-of 2024-01-01 --track --raw` |
+| `retrieve <query>` | Retrieve; `--limit 5 --mode bm25\|hybrid --as-of 2024-01-01 --track --raw`; filters `--path --exclude-path --type --tag --any-tag --date-from --date-to --in-force --meta K=V --filters JSON`; `--llm rewrite\|multi\|hyde` (optional, network) |
 | `explain <chunk_id>` | Explain retrieval; `--query "..."` |
 | `status` | Corpus + KG + bulletin + budget stats |
 | `session-start` | Warm context open |

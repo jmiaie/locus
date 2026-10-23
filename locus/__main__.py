@@ -51,6 +51,9 @@ def main() -> None:
     p_ret.add_argument("--track", action="store_true",
                        help="Record hits in the hot-context bulletin")
     p_ret.add_argument("--raw", action="store_true", help="Output JSON")
+    p_ret.add_argument("--llm", choices=["rewrite", "multi", "hyde"], default=None,
+                       help="Optional LLM query transformation (needs OPENROUTER_API_KEY or "
+                            "OPENAI_API_KEY[/OPENAI_BASE_URL]; makes network calls)")
     g = p_ret.add_argument_group("metadata filters (applied to the source document)")
     g.add_argument("--path", action="append", default=None, metavar="GLOB",
                    help="Only docs whose path matches GLOB (repeatable: any)")
@@ -305,15 +308,26 @@ def main() -> None:
         print(json.dumps(engine.reindex(backend=args.backend, analyzer=args.analyzer), indent=2))
 
     elif args.cmd == "retrieve":
-        chunks = engine.retrieve(
-            query=args.query,
-            limit=args.limit,
-            as_of=args.as_of,
-            use_links=not args.no_links,
-            mode=args.mode,
-            track=args.track,
-            filters=_cli_filters(args),
-        )
+        if args.llm:
+            from .llm import LLMError, OpenAICompatibleClient, llm_retrieve
+            try:
+                client = OpenAICompatibleClient.from_env()
+                chunks = llm_retrieve(engine, args.query, strategy=args.llm, client=client,
+                                      limit=args.limit, as_of=args.as_of, use_links=not args.no_links,
+                                      mode=args.mode, filters=_cli_filters(args))
+            except LLMError as e:
+                raise SystemExit(f"LLM error: {e}")
+            print(f"[llm] {args.llm} usage: {json.dumps(client.usage)}", file=sys.stderr)
+        else:
+            chunks = engine.retrieve(
+                query=args.query,
+                limit=args.limit,
+                as_of=args.as_of,
+                use_links=not args.no_links,
+                mode=args.mode,
+                track=args.track,
+                filters=_cli_filters(args),
+            )
         if args.raw:
             print(json.dumps([
                 {"chunk_id": c.chunk_id, "doc_path": c.doc_path,
