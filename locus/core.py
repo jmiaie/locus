@@ -43,6 +43,7 @@ from .retrieval.reranker import LocusReranker, RerankerWeights
 from .context.packer import ContextPacker, PackedContext
 from .retrieval.fusion import rrf_fuse
 from .retrieval.filters import MetadataFilter
+from .retrieval.prf import RM3Config
 from .retrieval.classifier import classify_query, INTENT_WEIGHTS, QueryIntent
 from .retrieval.streaming import StreamingConfig, StreamingRetriever
 from .context.bulletin import ContextBulletin
@@ -68,6 +69,8 @@ _CACHE_MAX_SIZE     = 256
 
 #: Retrieval modes.  "bm25" = first stage only; "hybrid" = BM25 + re-rank.
 RETRIEVAL_MODES = ("bm25", "hybrid")
+EXPANSIONS = (None, "rm3")
+PARENTS = (None, "section", "doc")
 DEFAULT_RETRIEVAL_MODE = "bm25"
 #: Stage-2 signals, in fusion order.
 RERANK_SIGNALS = ("kg", "links", "structural", "recency", "link_pop")
@@ -104,7 +107,15 @@ class LocusEngine:
         analyzer: str | None = None,
         rerank_depth: int = RERANK_DEPTH,
         rerank_alpha: float = RERANK_ALPHA,
+        chunking: dict | None = None,
+        rm3: "RM3Config | dict | None" = None,
     ):
+        """
+        chunking: chunk size/overlap/heading-context/boundary options (see
+        :class:`locus.memory.chunker.Chunker`); stored with the index.  Also
+        settable with ``LOCUS_CHUNKING='{"chunk_words": 200}'``.
+        rm3: default options for ``retrieve(..., expansion="rm3")``.
+        """
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
         mode = retrieval_mode or _default_mode()
@@ -119,7 +130,9 @@ class LocusEngine:
 
         self.corpus = Corpus(
             self.store_path / "corpus", section_aware=True, backend=index_backend, analyzer=analyzer,
+            chunking=chunking,
         )
+        self.rm3 = RM3Config.from_value(rm3)
         self.kg = TemporalKG(str(self.store_path / "kg.sqlite3"), resolver=self.resolver)
         self.bulletin = ContextBulletin(
             archive_path=self.store_path / "archive",
@@ -236,9 +249,22 @@ class LocusEngine:
         track: bool = False,
         signals: tuple[str, ...] | list[str] | None = None,
         filters: "MetadataFilter | dict | None" = None,
+        expansion: str | None = None,
+        parent: str | None = None,
+        rm3: "RM3Config | dict | None" = None,
     ) -> list[ScoredChunk]:
         """
         Retrieve the top *limit* chunks for *query*.
+
+        expansion: ``"rm3"`` expands the query with RM3 pseudo-relevance
+        feedback before BM25 (LLM-free; options from *rm3* or the engine's
+        ``rm3``).  Applies to the BM25 stage of both modes.  Off by default.
+
+        parent: ``"section"`` or ``"doc"`` returns the enclosing section or
+        whole document of the matched chunks instead of the chunks themselves
+        (small-to-big / parent-child retrieval).  Each result's ``spans`` cite
+        the matched passages inside its ``content``; its score is its best
+        chunk's.  ``limit`` counts parents.
 
         filters: restrict results by document metadata: path glob, type, tags,
         date range, point-in-time ``as_of`` (respects ``supersedes``) and custom
@@ -276,13 +302,19 @@ class LocusEngine:
         if not use_links:
             sig = tuple(s for s in sig if s != "links")
         mfilter = MetadataFilter.from_value(filters)
+        if expansion not in EXPANSIONS:
+            raise ValueError(f"expansion must be one of {EXPANSIONS}, got {expansion!r}")
+        if parent not in PARENTS:
+            raise ValueError(f"parent must be one of {PARENTS}, got {parent!r}")
+        rm3cfg = RM3Config.from_value(rm3) if rm3 is not None else self.rm3
 
         key = None
         fused: list[ScoredChunk] | None = None
         if use_cache:
             key = self._cache_key(
                 query, limit, as_of, use_links, intent.value if intent else "-", mode, sig,
-            ) + (("|f:" + mfilter.key()) if mfilter else "")
+            ) + (("|f:" + mfilter.key()) if mfilter else "") + (
+                f"|x:rm3:{rm3cfg.key()}" if expansion else "") + (f"|p:{parent}" if parent else "")
             if key in self._query_cache:
                 self._cache_hits += 1
                 fused = self._query_cache[key]
@@ -292,11 +324,17 @@ class LocusEngine:
         if fused is None:
             self._fire("pre_retrieve", query=query, limit=limit)
             if mode == "bm25":
-                def fetch(n: int) -> list[ScoredChunk]:
-                    return self._bm25.search(query, limit=n)
+                def base(n: int) -> list[ScoredChunk]:
+                    return self._bm25.search(query, limit=n, expansion=expansion, rm3=rm3cfg)
             else:
+                def base(n: int) -> list[ScoredChunk]:
+                    return self._hybrid(query, limit=n, as_of=as_of, intent=intent, signals=sig,
+                                        expansion=expansion, rm3=rm3cfg)
+            if parent:
                 def fetch(n: int) -> list[ScoredChunk]:
-                    return self._hybrid(query, limit=n, as_of=as_of, intent=intent, signals=sig)
+                    return self._parents(base, n, parent)
+            else:
+                fetch = base
             fused = self._apply_filter(fetch, limit, mfilter) if mfilter else fetch(limit)
             if use_cache:
                 if len(self._query_cache) >= _CACHE_MAX_SIZE:
@@ -334,6 +372,65 @@ class LocusEngine:
                 return kept[:limit]
             depth *= 4
 
+    def _parents(self, base, limit: int, level: str) -> list[ScoredChunk]:
+        """Group ranked chunks into their parent sections/documents (deepening the pool)."""
+        if limit <= 0:
+            return []
+        depth = max(limit * 4, 20)
+        while True:
+            ranked = base(depth)
+            groups: dict[str, list[ScoredChunk]] = {}
+            meta = self.corpus.get_chunks_batch([c.chunk_id for c in ranked])
+            pid_of: dict[str, str] = {}
+            for c in ranked:
+                m = meta.get(c.chunk_id)
+                pid = (m.metadata.get("parent_id") if m else None) or ("chunk:" + c.chunk_id)
+                key = ("doc:" + c.doc_path) if level == "doc" else pid
+                pid_of[c.chunk_id] = pid
+                groups.setdefault(key, []).append(c)
+            if len(groups) >= limit or len(ranked) < depth:
+                break
+            depth *= 4
+        keys = list(groups)[:limit]
+        sections = self.corpus.get_sections(
+            [pid for k in keys for c in groups[k] for pid in [pid_of[c.chunk_id]] if not pid.startswith("chunk:")]
+        )
+        doc_secs = self.corpus.doc_sections([groups[k][0].doc_path for k in keys]) if level == "doc" else {}
+        out: list[ScoredChunk] = []
+        for k in keys:
+            members = groups[k]
+            best = members[0]
+            # Parent text and the offset of each section inside it.
+            if level == "doc" and doc_secs.get(best.doc_path):
+                secs = doc_secs[best.doc_path]
+                parts, offs, pos = [], {}, 0
+                for sec in secs:
+                    offs[sec.id] = pos
+                    parts.append(sec.content)
+                    pos += len(sec.content) + 2
+                content, pid = "\n\n".join(parts), "doc:" + best.doc_path
+            else:
+                sec = sections.get(pid_of[best.chunk_id])
+                content = sec.content if sec else best.content
+                offs = {sec.id: 0} if sec else {}
+                pid = sec.id if sec else best.chunk_id
+            spans = []
+            ents: list[str] = []
+            for c in members:
+                m = meta.get(c.chunk_id)
+                sp = m.metadata.get("span") if m else None
+                base_off = offs.get(pid_of[c.chunk_id])
+                if sp and base_off is not None:
+                    start, end = base_off + sp[0], base_off + sp[1]
+                else:  # store indexed before parents were recorded: cite the chunk itself
+                    i = content.find(c.content)
+                    start, end = (i, i + len(c.content)) if i >= 0 else (0, len(content))
+                spans.append({"chunk_id": c.chunk_id, "start": start, "end": end, "score": c.score})
+                ents.extend(e for e in c.entities if e not in ents)
+            out.append(ScoredChunk(pid, best.doc_path, best.score, content,
+                                   best.provenance + "+parent", ents, spans))
+        return out
+
     def _track(self, chunks: list[ScoredChunk], label: str = "") -> None:
         """Record retrieved chunks in the bulletin and token budget (writes)."""
         total_tokens = 0
@@ -358,9 +455,11 @@ class LocusEngine:
         as_of: str | None,
         intent: QueryIntent,
         signals: tuple[str, ...] = RERANK_SIGNALS,
+        expansion: str | None = None,
+        rm3: RM3Config | None = None,
     ) -> list[ScoredChunk]:
         """BM25 candidate pool re-ranked by the stage-2 signals (read-only)."""
-        pool = self._bm25.search(query, limit=max(limit, self.rerank_depth))
+        pool = self._bm25.search(query, limit=max(limit, self.rerank_depth), expansion=expansion, rm3=rm3)
         if not pool:
             return []
         # Best-ranked pool chunk per document: doc-level signals vote for it.

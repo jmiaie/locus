@@ -33,7 +33,7 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable, Optional
 
-from .chunker import Chunker, Chunk
+from .chunker import CHUNKING_DEFAULTS, Chunker, Chunk, Section, normalize_chunking
 from .stemmer import stem
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,16 @@ def analyze(text: str, analyzer: str = "plain") -> list[str]:
 _FTS5_AVAILABLE: Optional[bool] = None
 
 
+def _env_chunking() -> Optional[dict]:
+    raw = os.environ.get("LOCUS_CHUNKING", "").strip()
+    if not raw:
+        return None
+    try:
+        return normalize_chunking(json.loads(raw))
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Invalid LOCUS_CHUNKING={raw!r}: {e}") from None
+
+
 def fts5_available() -> bool:
     """True if this Python's sqlite3 module was compiled with FTS5."""
     global _FTS5_AVAILABLE
@@ -169,6 +179,15 @@ class Corpus:
         indexed_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS sections (
+        id       TEXT PRIMARY KEY,
+        doc_path TEXT NOT NULL,
+        ordinal  INTEGER NOT NULL,
+        heading  TEXT,
+        content  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_section_doc ON sections(doc_path);
+
     CREATE TABLE IF NOT EXISTS meta (
         key   TEXT PRIMARY KEY,
         value TEXT
@@ -189,10 +208,14 @@ class Corpus:
         section_aware: bool = True,
         backend: Optional[str] = None,
         analyzer: Optional[str] = None,
+        chunking: Optional[dict] = None,
     ):
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.store_path / "corpus.sqlite3")
+        self._section_aware = section_aware
+        self._requested_chunking = normalize_chunking(chunking) if chunking is not None else _env_chunking()
+        self.chunking: dict = dict(CHUNKING_DEFAULTS)
         self._chunker = Chunker(section_aware=section_aware)
         self._N_cache: Optional[int] = None
         self._avgdl_cache: Optional[float] = None
@@ -227,6 +250,19 @@ class Corpus:
             meta_analyzer = self._meta_get(conn, "analyzer")
             stored_analyzer = meta_analyzer or "plain"
             has_chunks = conn.execute("SELECT 1 FROM chunks LIMIT 1").fetchone() is not None
+            raw_chunking = self._meta_get(conn, "chunking")
+            stored_chunking = normalize_chunking(json.loads(raw_chunking)) if raw_chunking else dict(CHUNKING_DEFAULTS)
+            # Chunking: an explicit request (argument or LOCUS_CHUNKING) wins;
+            # otherwise keep what the store was built with.  A change cannot be
+            # applied from stored chunks, so the source files are re-chunked on
+            # the next index() (their checksums are cleared here).
+            self.chunking = self._requested_chunking or stored_chunking
+            if self.chunking != stored_chunking and has_chunks:
+                logger.warning("Chunking changed (%s -> %s); re-run index() to re-chunk documents",
+                               stored_chunking, self.chunking)
+                conn.execute("UPDATE doc_stats SET checksum = NULL")
+            self._meta_set(conn, "chunking", json.dumps(self.chunking, sort_keys=True))
+        self._chunker = Chunker.from_config(self.chunking, section_aware=self._section_aware)
 
         want = self._requested_backend or _default_backend()
         if want == "fts5" and not fts5_available():
@@ -378,7 +414,7 @@ class Corpus:
         base_path: Path | None = None,
         force: bool = False,
     ) -> int:
-        chunks = self._chunker.chunk_file(path, base_path=base_path)
+        chunks, sections = self._chunker.chunk_file_with_sections(path, base_path=base_path)
         if not chunks:
             return 0
         doc_id = chunks[0].doc_path
@@ -399,6 +435,10 @@ class Corpus:
             unique[chunk.id] = chunk
         for chunk in unique.values():
             self._store_chunk_conn(conn, chunk)
+        conn.executemany(
+            "INSERT OR REPLACE INTO sections (id, doc_path, ordinal, heading, content) VALUES (?, ?, ?, ?, ?)",
+            [(sec.id, sec.doc_path, sec.ordinal, sec.heading, sec.content) for sec in sections],
+        )
 
         word_count = sum(len(c.content.split()) for c in unique.values())
         conn.execute(
@@ -459,6 +499,7 @@ class Corpus:
             "SELECT rowid, id FROM chunks WHERE doc_path = ?", (doc_path,)
         ).fetchall()
         conn.execute("DELETE FROM doc_stats WHERE doc_path = ?", (doc_path,))
+        conn.execute("DELETE FROM sections WHERE doc_path = ?", (doc_path,))
         if not rows:
             return 0
         if self.backend == "fts5":
@@ -648,6 +689,106 @@ class Corpus:
                 ).fetchall():
                     if r[1] not in out:
                         out[r[1]] = self._row_to_chunk(r)
+        return out
+
+    def get_sections(self, section_ids: list[str]) -> dict[str, Section]:
+        """Parent sections by id (see :class:`~locus.memory.chunker.Section`)."""
+        out: dict[str, Section] = {}
+        ids = list(dict.fromkeys(section_ids))
+        with self._conn() as conn:
+            for i in range(0, len(ids), 900):
+                part = ids[i:i + 900]
+                ph = ",".join("?" * len(part))
+                for r in conn.execute(
+                    f"SELECT id, doc_path, ordinal, heading, content FROM sections WHERE id IN ({ph})", part
+                ).fetchall():
+                    out[r[0]] = Section(*r)
+        return out
+
+    def doc_sections(self, doc_paths: list[str]) -> dict[str, list[Section]]:
+        """All sections of each document, in document order."""
+        out: dict[str, list[Section]] = {}
+        paths = list(dict.fromkeys(doc_paths))
+        with self._conn() as conn:
+            for i in range(0, len(paths), 900):
+                part = paths[i:i + 900]
+                ph = ",".join("?" * len(part))
+                for r in conn.execute(
+                    f"SELECT id, doc_path, ordinal, heading, content FROM sections "
+                    f"WHERE doc_path IN ({ph}) ORDER BY doc_path, ordinal", part
+                ).fetchall():
+                    out.setdefault(r[1], []).append(Section(*r))
+        return out
+
+    def score_terms(self, terms: list[str], chunk_ids: list[str]) -> dict[str, dict[str, float]]:
+        """
+        Per-term BM25 contribution for each of *chunk_ids*:
+        ``{term: {chunk_id: score}}`` (chunks without the term are absent).
+
+        Uses the same formula and corpus statistics as :meth:`search_bm25`, so
+        summing a chunk's per-term scores reproduces its query score.  Used by
+        weighted (e.g. RM3-expanded) queries, which FTS5 cannot express.
+        """
+        terms = list(dict.fromkeys(terms))
+        ids = list(dict.fromkeys(chunk_ids))
+        if not terms or not ids:
+            return {}
+        out: dict[str, dict[str, float]] = {}
+        with self._conn() as conn:
+            rowid_of: dict[int, str] = {}
+            for i in range(0, len(ids), 900):
+                part = ids[i:i + 900]
+                ph = ",".join("?" * len(part))
+                for rowid, cid in conn.execute(f"SELECT rowid, id FROM chunks WHERE id IN ({ph})", part):
+                    rowid_of[rowid] = cid
+            if not rowid_of:
+                return {}
+            if self.backend == "fts5":
+                rowids = sorted(rowid_of)
+                ph = ",".join("?" * len(rowids))
+                sql = (f"SELECT rowid, -bm25(chunk_fts) FROM chunk_fts "
+                       f"WHERE chunk_fts MATCH ? AND rowid IN ({ph})")
+                for t in terms:
+                    rows = conn.execute(sql, [_fts_query([t]), *rowids]).fetchall()
+                    if rows:
+                        out[t] = {rowid_of[r]: float(s) for r, s in rows}
+                return out
+            N, avgdl = self._chunk_stats(conn)
+            if N == 0 or avgdl == 0:
+                return {}
+            wanted = set(rowid_of.values())
+            for t in terms:
+                rows = conn.execute(
+                    "SELECT t.chunk_id, t.tf, c.n_tokens FROM term_index t "
+                    "JOIN chunks c ON c.id = t.chunk_id WHERE t.term = ?", (t,),
+                ).fetchall()
+                if not rows:
+                    continue
+                n = len(rows)
+                idf = math.log((N - n + 0.5) / (n + 0.5))
+                if idf <= 0:
+                    idf = 1e-6
+                scores: dict[str, float] = {}
+                for cid, tf_norm, dl in rows:
+                    if cid not in wanted:
+                        continue
+                    dl = dl or 0
+                    tf = round(tf_norm * dl) if dl else 1
+                    scores[cid] = idf * tf * (BM25_K1 + 1) / (tf + BM25_K1 * (1 - BM25_B + BM25_B * dl / avgdl))
+                if scores:
+                    out[t] = scores
+        return out
+
+    def chunk_order(self, chunk_ids: list[str]) -> dict[str, int]:
+        """Index order (rowid) of each chunk, for deterministic tie-breaking."""
+        out: dict[str, int] = {}
+        ids = list(dict.fromkeys(chunk_ids))
+        with self._conn() as conn:
+            for i in range(0, len(ids), 900):
+                part = ids[i:i + 900]
+                ph = ",".join("?" * len(part))
+                out.update({cid: r for r, cid in conn.execute(
+                    f"SELECT rowid, id FROM chunks WHERE id IN ({ph})", part)})
         return out
 
     def doc_frontmatter(self, doc_paths: list[str]) -> dict[str, dict]:
