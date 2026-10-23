@@ -109,12 +109,20 @@ class LocusEngine:
         rerank_alpha: float = RERANK_ALPHA,
         chunking: dict | None = None,
         rm3: "RM3Config | dict | None" = None,
+        reranker=None,
+        follow_symlinks=None,
     ):
         """
         chunking: chunk size/overlap/heading-context/boundary options (see
         :class:`locus.memory.chunker.Chunker`); stored with the index.  Also
         settable with ``LOCUS_CHUNKING='{"chunk_words": 200}'``.
         rm3: default options for ``retrieve(..., expansion="rm3")``.
+        follow_symlinks: symlinks met while indexing a directory: False
+        (default; skip), ``"inside"`` (only links resolving inside the indexed
+        directory) or True (follow all).  Also ``LOCUS_FOLLOW_SYMLINKS``.
+        reranker: optional second-stage reranker, e.g.
+        ``locus.rerank.CrossEncoderReranker`` (``pip install "locus[rerank]"``);
+        when set, ``retrieve`` reranks by default (``rerank=False`` to skip).
         """
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
@@ -130,9 +138,10 @@ class LocusEngine:
 
         self.corpus = Corpus(
             self.store_path / "corpus", section_aware=True, backend=index_backend, analyzer=analyzer,
-            chunking=chunking,
+            chunking=chunking, follow_symlinks=follow_symlinks,
         )
         self.rm3 = RM3Config.from_value(rm3)
+        self.reranker = reranker
         self.kg = TemporalKG(str(self.store_path / "kg.sqlite3"), resolver=self.resolver)
         self.bulletin = ContextBulletin(
             archive_path=self.store_path / "archive",
@@ -252,6 +261,7 @@ class LocusEngine:
         expansion: str | None = None,
         parent: str | None = None,
         rm3: "RM3Config | dict | None" = None,
+        rerank: bool | None = None,
     ) -> list[ScoredChunk]:
         """
         Retrieve the top *limit* chunks for *query*.
@@ -265,6 +275,9 @@ class LocusEngine:
         (small-to-big / parent-child retrieval).  Each result's ``spans`` cite
         the matched passages inside its ``content``; its score is its best
         chunk's.  ``limit`` counts parents.
+
+        rerank: rerank the top candidates with the engine's ``reranker``
+        (default: on when the engine has one).  Raises if True without one.
 
         filters: restrict results by document metadata: path glob, type, tags,
         date range, point-in-time ``as_of`` (respects ``supersedes``) and custom
@@ -307,6 +320,9 @@ class LocusEngine:
         if parent not in PARENTS:
             raise ValueError(f"parent must be one of {PARENTS}, got {parent!r}")
         rm3cfg = RM3Config.from_value(rm3) if rm3 is not None else self.rm3
+        if rerank and self.reranker is None:
+            raise ValueError("rerank=True needs LocusEngine(reranker=...), see locus.rerank")
+        rr = self.reranker if (rerank is None or rerank) else None
 
         key = None
         fused: list[ScoredChunk] | None = None
@@ -314,7 +330,8 @@ class LocusEngine:
             key = self._cache_key(
                 query, limit, as_of, use_links, intent.value if intent else "-", mode, sig,
             ) + (("|f:" + mfilter.key()) if mfilter else "") + (
-                f"|x:rm3:{rm3cfg.key()}" if expansion else "") + (f"|p:{parent}" if parent else "")
+                f"|x:rm3:{rm3cfg.key()}" if expansion else "") + (f"|p:{parent}" if parent else "") + (
+                f"|r:{rr.key()}" if rr is not None else "")
             if key in self._query_cache:
                 self._cache_hits += 1
                 fused = self._query_cache[key]
@@ -330,6 +347,12 @@ class LocusEngine:
                 def base(n: int) -> list[ScoredChunk]:
                     return self._hybrid(query, limit=n, as_of=as_of, intent=intent, signals=sig,
                                         expansion=expansion, rm3=rm3cfg)
+            if rr is not None:
+                first = base
+
+                def base(n: int) -> list[ScoredChunk]:
+                    pool = first(max(n, rr.depth))
+                    return rr.rerank(query, pool, limit=n)
             if parent:
                 def fetch(n: int) -> list[ScoredChunk]:
                     return self._parents(base, n, parent)

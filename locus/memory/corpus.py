@@ -122,6 +122,68 @@ def _env_chunking() -> Optional[dict]:
         raise ValueError(f"Invalid LOCUS_CHUNKING={raw!r}: {e}") from None
 
 
+SYMLINK_MODES = (False, "inside", True)
+
+
+def _symlink_mode(value=None):
+    """Resolve the symlink policy: argument, else ``LOCUS_FOLLOW_SYMLINKS``, else False."""
+    if value is None:
+        value = os.environ.get("LOCUS_FOLLOW_SYMLINKS", "").strip().lower() or False
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("0", "false", "no", "off", "none", ""):
+            return False
+        if v in ("1", "true", "yes", "on", "all"):
+            return True
+        if v == "inside":
+            return "inside"
+        raise ValueError(f"follow_symlinks must be one of {SYMLINK_MODES}, got {value!r}")
+    if value not in SYMLINK_MODES:
+        raise ValueError(f"follow_symlinks must be one of {SYMLINK_MODES}, got {value!r}")
+    return value
+
+
+def iter_index_files(root: Path, pattern: str = "**/*.md", follow_symlinks=None) -> list[Path]:
+    """
+    Files under *root* matching *pattern* that should be indexed, sorted.
+
+    Tool directories (``.locus``, ``.git``, ...) are skipped.  Symlinks (the
+    file itself or any directory between *root* and it) are handled by
+    *follow_symlinks* (default ``LOCUS_FOLLOW_SYMLINKS`` or False):
+
+    * ``False`` — skip them, so indexing never reads outside the tree.
+    * ``"inside"`` — follow only links that resolve inside *root*.
+    * ``True`` — follow every link (the behaviour before 1.2).
+    """
+    root = Path(root)
+    mode = _symlink_mode(follow_symlinks)
+    real_root = root.resolve()
+    out = []
+    for f in root.glob(pattern):
+        if any(ex in f.parts for ex in _EXCLUDE):
+            continue
+        if mode is not True:
+            linked = False
+            cur = root
+            for part in f.relative_to(root).parts:
+                cur = cur / part
+                if cur.is_symlink():
+                    linked = True
+                    break
+            if linked:
+                if mode is False:
+                    logger.debug("Skipping symlink %s (follow_symlinks=False)", f)
+                    continue
+                try:
+                    f.resolve().relative_to(real_root)
+                except (ValueError, OSError, RuntimeError):
+                    logger.debug("Skipping symlink %s: resolves outside %s", f, root)
+                    continue
+        if f.is_file():
+            out.append(f)
+    return sorted(out)
+
+
 def fts5_available() -> bool:
     """True if this Python's sqlite3 module was compiled with FTS5."""
     global _FTS5_AVAILABLE
@@ -209,8 +271,11 @@ class Corpus:
         backend: Optional[str] = None,
         analyzer: Optional[str] = None,
         chunking: Optional[dict] = None,
+        follow_symlinks=None,
     ):
         self.store_path = Path(store_path)
+        #: Symlink policy for directory indexing (see :func:`iter_index_files`).
+        self.follow_symlinks = _symlink_mode(follow_symlinks)
         self.store_path.mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.store_path / "corpus.sqlite3")
         self._section_aware = section_aware
@@ -447,13 +512,10 @@ class Corpus:
         )
         return len(unique)
 
-    def iter_files(self, path: Path, pattern: str = "**/*.md") -> list[Path]:
-        """Files under *path* matching *pattern*, excluding tool dirs, sorted."""
-        path = Path(path)
-        return sorted(
-            f for f in path.glob(pattern)
-            if f.is_file() and not any(ex in f.parts for ex in _EXCLUDE)
-        )
+    def iter_files(self, path: Path, pattern: str = "**/*.md", follow_symlinks=None) -> list[Path]:
+        """Files under *path* matching *pattern* (see :func:`iter_index_files`)."""
+        return iter_index_files(Path(path), pattern,
+                                self.follow_symlinks if follow_symlinks is None else follow_symlinks)
 
     def add_directory(self, path: Path, pattern: str = "**/*.md") -> int:
         total, _ = self.add_directory_changed(path, pattern=pattern)

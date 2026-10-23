@@ -41,6 +41,9 @@ def main() -> None:
     p_index = sub.add_parser("index", help="Index a file or directory")
     p_index.add_argument("path")
     p_index.add_argument("--pattern", default="**/*.md")
+    p_index.add_argument("--follow-symlinks", choices=["no", "inside", "all"], default=None,
+                         help="Symlinks under the directory: skip (default), follow only those resolving "
+                              "inside it, or follow all (also LOCUS_FOLLOW_SYMLINKS)")
     p_index.add_argument("--chunk-words", type=int, default=None,
                          help="Chunk size in words (default 400; stored with the index)")
     p_index.add_argument("--overlap-words", type=int, default=None, help="Window overlap (default 50)")
@@ -319,7 +322,10 @@ def main() -> None:
             # Start from the store's current settings, then apply the flags.
             current = Corpus(Path(args.store) / "corpus").chunking
             chunking = normalize_chunking({**current, **opts})
-    engine = LocusEngine(store_path=args.store, chunking=chunking)
+    follow = None
+    if args.cmd == "index" and args.follow_symlinks:
+        follow = {"no": False, "inside": "inside", "all": True}[args.follow_symlinks]
+    engine = LocusEngine(store_path=args.store, chunking=chunking, follow_symlinks=follow)
 
     # ----------------------------------------------------------------
     # Engine commands
