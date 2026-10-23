@@ -1,0 +1,52 @@
+# Example on-prem deployment of Locus (HTTP JSON-RPC + MCP tools).
+#
+#   make dist && docker compose -f deploy/docker-compose.yml build
+#   install -d -m 0700 deploy/secrets
+#   openssl rand -hex 32 > deploy/secrets/locus_token.txt && chmod 0444 deploy/secrets/locus_token.txt
+#     (the secret is bind-mounted with host permissions and the container runs as
+#      uid 10001, so the file must be readable by it; the 0700 directory keeps
+#      other host users out.  If the file is unreadable Locus exits with an error
+#      instead of starting without auth.)
+#   docker compose -f deploy/docker-compose.yml up -d
+#   docker compose -f deploy/docker-compose.yml exec locus locus index /docs
+#   curl -s -H "Authorization: Bearer $(cat deploy/secrets/locus_token.txt)" \
+#        -H "Content-Type: application/json" \
+#        -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"locus_retrieve","arguments":{"query":"slab concrete strength","limit":3}}}' \
+#        http://127.0.0.1:7391/rpc
+#
+# The port is published on the host's loopback only.  To serve other machines,
+# put a TLS-terminating reverse proxy in front; do not publish on 0.0.0.0 without TLS.
+services:
+  locus:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: locus:local
+    environment:
+      # Inside the container we must listen on all interfaces for the published
+      # port to work, so a token is mandatory (Locus refuses otherwise).
+      LOCUS_HTTP_HOST: 0.0.0.0
+      LOCUS_HTTP_TOKEN_FILE: /run/secrets/locus_token
+    secrets:
+      - locus_token
+    ports:
+      - "127.0.0.1:7391:7391"
+    volumes:
+      - locus-data:/data
+      - ${LOCUS_DOCS_DIR:-../examples/construction/docs}:/docs:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 128
+    restart: unless-stopped
+
+secrets:
+  locus_token:
+    file: ./secrets/locus_token.txt
+
+volumes:
+  locus-data:

@@ -1,0 +1,3 @@
+# Only dist/*.whl is copied into the image.
+*
+!dist/*.whl

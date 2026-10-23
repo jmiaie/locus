@@ -1,0 +1,16 @@
+{
+  "_note": "SYNTHETIC. Curated point-in-time facts, each traced to the source revision that states it. valid_to is inclusive (the day before the superseding revision took effect). In a real deployment these would be extracted by a reviewer or an extraction step and checked against the documents.",
+  "facts": [
+    {"subject": "Level 2 slab", "predicate": "specified_fc", "object": "4,000 psi at 28 days, 6.25 in total thickness", "valid_from": "2026-01-12", "valid_to": "2026-03-19", "source": "specs/03-30-00-cast-in-place-concrete-rev0.md"},
+    {"subject": "Level 2 slab", "predicate": "specified_fc", "object": "5,000 psi at 28 days, 7.5 in total thickness (gridlines C-F / 3-7)", "valid_from": "2026-03-20", "valid_to": null, "source": "specs/03-30-00-cast-in-place-concrete-rev1.md"},
+    {"subject": "Roof membrane", "predicate": "specified_system", "object": "60-mil mechanically attached TPO, 20-year NDL warranty", "valid_from": "2026-01-12", "valid_to": "2026-05-03", "source": "specs/07-54-23-tpo-roofing-rev0.md"},
+    {"subject": "Roof membrane", "predicate": "specified_system", "object": "80-mil fully adhered TPO over cover board, 30-year NDL warranty", "valid_from": "2026-05-04", "valid_to": null, "source": "specs/07-54-23-tpo-roofing-rev1.md"},
+    {"subject": "Stair 2 door HW-5", "predicate": "specified_hardware", "object": "maglock with 15-second delayed egress, fail-secure", "valid_from": "2026-01-12", "valid_to": "2026-06-07", "source": "specs/08-71-00-door-hardware-rev0.md"},
+    {"subject": "Stair 2 door HW-5", "predicate": "specified_hardware", "object": "exit device, stair-side card reader, no delayed egress, fail-safe", "valid_from": "2026-06-08", "valid_to": null, "source": "specs/08-71-00-door-hardware-rev1.md"},
+    {"subject": "Saturday work", "predicate": "permitted_hours", "object": "not permitted without written approval", "valid_from": "2026-01-28", "valid_to": "2026-04-14", "source": "permits/BP-2026-0418-permit-conditions.md"},
+    {"subject": "Saturday work", "predicate": "permitted_hours", "object": "8:00 a.m. to 4:00 p.m.", "valid_from": "2026-04-15", "valid_to": null, "source": "permits/BP-2026-0418-amendment-1-work-hours.md"},
+    {"subject": "Contract sum", "predicate": "change_order", "object": "CO-002 +$48,600 (Level 2 slab, RFI-011)", "valid_from": "2026-04-01", "valid_to": null, "source": "change-orders/CO-002-level-2-slab-upgrade.md"},
+    {"subject": "Contract sum", "predicate": "change_order", "object": "CO-003 +$31,250, +5 days (roof, RFI-012)", "valid_from": "2026-05-08", "valid_to": null, "source": "change-orders/CO-003-roof-membrane-upgrade.md"},
+    {"subject": "Contract sum", "predicate": "change_order", "object": "CO-005 +$12,940 (MRI sprinklers RFI-015, Stair 2 RFI-019)", "valid_from": "2026-06-20", "valid_to": null, "source": "change-orders/CO-005-mri-suite-sprinkler-and-door-hardware.md"}
+  ]
+}

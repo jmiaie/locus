@@ -4,6 +4,7 @@ locus CLI — command-line interface for Locus vectorless RAG.
 
 import argparse
 import json
+import os
 import sys
 
 
@@ -12,7 +13,8 @@ def main() -> None:
         prog="locus",
         description="Locus — Vectorless RAG with MCP",
     )
-    parser.add_argument("--store", default=".locus", metavar="PATH")
+    parser.add_argument("--store", default=os.environ.get("LOCUS_STORE", ".locus"), metavar="PATH",
+                        help="Store directory (env LOCUS_STORE; default .locus)")
 
     sub = parser.add_subparsers(dest="cmd", metavar="COMMAND")
 
@@ -80,9 +82,16 @@ def main() -> None:
     p_mcp.add_argument("--store", default=None, dest="mcp_store")
 
     p_serve = sub.add_parser("serve", help="Start the HTTP JSON-RPC server")
-    p_serve.add_argument("--host",  default="127.0.0.1")
-    p_serve.add_argument("--port",  type=int, default=7391)
-    p_serve.add_argument("--token", default=None, help="Bearer token (required for non-loopback hosts)")
+    p_serve.add_argument("--host",  default=os.environ.get("LOCUS_HTTP_HOST", "127.0.0.1"),
+                         help="Bind address (env LOCUS_HTTP_HOST; default 127.0.0.1)")
+    p_serve.add_argument("--port",  type=int, default=int(os.environ.get("LOCUS_HTTP_PORT", "7391")),
+                         help="Port (env LOCUS_HTTP_PORT; default 7391)")
+    p_serve.add_argument("--token", default=os.environ.get("LOCUS_HTTP_TOKEN") or None,
+                         help="Bearer token, required for non-loopback hosts (env LOCUS_HTTP_TOKEN; "
+                              "prefer --token-file)")
+    p_serve.add_argument("--token-file", default=os.environ.get("LOCUS_HTTP_TOKEN_FILE") or None,
+                         help="Read the bearer token from a file, e.g. a Docker secret "
+                              "(env LOCUS_HTTP_TOKEN_FILE)")
     p_serve.add_argument("--cors-origin", default=None, help="Allowed browser origin (CORS off by default)")
 
     # ----------------------------------------------------------------
@@ -232,13 +241,14 @@ def main() -> None:
         import logging
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
         from .core import LocusEngine
-        from .mcp.http_server import serve
+        from .mcp.http_server import resolve_token, serve
         try:
+            token = resolve_token(args.token, args.token_file)
             serve(
                 LocusEngine(store_path=args.store),
                 host=args.host,
                 port=args.port,
-                token=args.token,
+                token=token,
                 cors_origin=args.cors_origin,
             )
         except ValueError as e:

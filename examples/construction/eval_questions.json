@@ -1,0 +1,26 @@
+{
+  "_note": "SYNTHETIC demo evaluation set, written together with the documents and BEFORE running retrieval (no tuning against results). Paths are relative to examples/construction/docs. 'as_of' questions are scored with the point-in-time view in demo.py.",
+  "questions": [
+    {"id": "Q01", "kind": "lookup", "query": "What compressive strength is specified for the columns and shear walls?", "expected_docs": ["specs/03-30-00-cast-in-place-concrete-rev1.md", "specs/03-30-00-cast-in-place-concrete-rev0.md"]},
+    {"id": "Q02", "kind": "rfi-trace", "query": "Why was the Level 2 slab thickened and what did it cost?", "expected_docs": ["rfis/RFI-011-level-2-slab-vibration-mri.md", "change-orders/CO-002-level-2-slab-upgrade.md"]},
+    {"id": "Q03", "kind": "rfi-trace", "query": "Which change order paid for the roof membrane upgrade and how many days were added?", "expected_docs": ["change-orders/CO-003-roof-membrane-upgrade.md"]},
+    {"id": "Q04", "kind": "rfi-trace", "query": "How was the curtain wall embed plate conflict with the slab edge bars resolved?", "expected_docs": ["rfis/RFI-007-curtain-wall-embeds-slab-edge.md"]},
+    {"id": "Q05", "kind": "rfi-trace", "query": "Were the low concrete cylinder breaks on the Level 2 pour accepted?", "expected_docs": ["rfis/RFI-021-low-cylinder-breaks-level-2.md"]},
+    {"id": "Q06", "kind": "lookup", "query": "What are the permitted Saturday work hours?", "expected_docs": ["permits/BP-2026-0418-amendment-1-work-hours.md"]},
+    {"id": "Q07", "kind": "lookup", "query": "Does the permit allow delayed egress locks on exit stair doors?", "expected_docs": ["permits/BP-2026-0418-permit-conditions.md"]},
+    {"id": "Q08", "kind": "rfi-trace", "query": "Why was delayed egress removed from the Stair 2 door hardware?", "expected_docs": ["rfis/RFI-019-stair-2-delayed-egress.md", "specs/08-71-00-door-hardware-rev1.md"]},
+    {"id": "Q09", "kind": "lookup", "query": "What sprinkler heads and piping are required inside the MRI 5-gauss line?", "expected_docs": ["rfis/RFI-015-sprinkler-heads-mri-suite.md"]},
+    {"id": "Q10", "kind": "lookup", "query": "What is the tenant improvement allowance for Suite 200?", "expected_docs": ["lease/lease-abstract-suite-200-ardell-imaging.md"]},
+    {"id": "Q11", "kind": "lookup", "query": "What happens if the landlord misses the outside delivery date for the imaging tenant?", "expected_docs": ["lease/lease-abstract-suite-200-ardell-imaging.md"]},
+    {"id": "Q12", "kind": "lookup", "query": "What roof warranty does the lease require the landlord to deliver?", "expected_docs": ["lease/lease-abstract-suite-200-ardell-imaging.md"]},
+    {"id": "Q13", "kind": "lookup", "query": "Why was the first TPO roofing submittal rejected?", "expected_docs": ["submittals/SUB-07-004-tpo-roofing-product-data.md"]},
+    {"id": "Q14", "kind": "lookup", "query": "Which mix design was approved for the Level 2 slab?", "expected_docs": ["submittals/SUB-03-001-concrete-mix-designs.md"]},
+    {"id": "Q15", "kind": "lookup", "query": "What is the total of change order CO-005 and what does it cover?", "expected_docs": ["change-orders/CO-005-mri-suite-sprinkler-and-door-hardware.md"]},
+    {"id": "Q16", "kind": "as_of", "query": "Level 2 elevated slab specified compressive strength", "as_of": "2026-02-15", "expected_docs": ["specs/03-30-00-cast-in-place-concrete-rev0.md"]},
+    {"id": "Q17", "kind": "as_of", "query": "Level 2 elevated slab specified compressive strength", "as_of": "2026-04-01", "expected_docs": ["specs/03-30-00-cast-in-place-concrete-rev1.md"]},
+    {"id": "Q18", "kind": "as_of", "query": "TPO roof membrane thickness and warranty", "as_of": "2026-04-20", "expected_docs": ["specs/07-54-23-tpo-roofing-rev0.md"]},
+    {"id": "Q19", "kind": "as_of", "query": "TPO roof membrane thickness and warranty", "as_of": "2026-06-01", "expected_docs": ["specs/07-54-23-tpo-roofing-rev1.md"]},
+    {"id": "Q20", "kind": "as_of", "query": "Stair 2 door hardware set HW-5 delayed egress", "as_of": "2026-05-30", "expected_docs": ["specs/08-71-00-door-hardware-rev0.md"]},
+    {"id": "Q21", "kind": "as_of", "query": "construction work hours Saturday", "as_of": "2026-03-01", "expected_docs": ["permits/BP-2026-0418-permit-conditions.md"]}
+  ]
+}
