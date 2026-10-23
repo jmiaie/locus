@@ -244,3 +244,15 @@ The CPU-only torch wheel would shrink the semantic installs, but the default `pi
 - **Threads.** Model-backed processes were capped at 2 intra-op threads.
 - **Not reproduced.** Vendor numbers in section 3 come from their own papers and blogs and were **not** reproduced. Their metrics (QA accuracy, LoCoMo J) are not comparable with retrieval recall.
 - **Interpretation.** Read the paired-difference tables, not the leaderboard order. Several gaps are inside the noise.
+
+## RAG feature pack (2026-10-23)
+
+| Feature | Status in Locus | Default? | Quality result |
+|---|---|---|---|
+| Metadata filtering (path glob, type, tags, date range, `as_of` with `supersedes`, custom fields) in API / CLI / MCP | shipped | always available (no filter = unchanged results) | correctness-tested only; filters never change scores |
+| LLM query rewriting / multi-query (RRF) / HyDE via any OpenAI-compatible endpoint | shipped as optional plugin (`locus.llm`) | opt-in | **pending**: no API key was available, so it has not been benchmarked |
+
+Comparison with other systems' filtering:
+- **Chroma** and **LlamaIndex** offer metadata filters on user-supplied metadata.
+- **mem0** filters on user, agent and run ids plus metadata.
+- **Locus** reads its filter fields from document frontmatter. It adds a point-in-time view that understands `supersedes` chains; we did not find this in the other systems' docs.
