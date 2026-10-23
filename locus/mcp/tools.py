@@ -47,6 +47,17 @@ TOOLS: dict[str, dict] = {
                     "type": "boolean", "default": True,
                     "description": "Record hits in the hot-context bulletin (set false for a pure read).",
                 },
+                "expansion": {
+                    "type": "string", "enum": ["rm3"],
+                    "description": "LLM-free query expansion (RM3 pseudo-relevance feedback). Off by default.",
+                },
+                "parent": {
+                    "type": "string", "enum": ["section", "doc"],
+                    "description": (
+                        "Return the enclosing section or whole document of the matched chunks (parent-child "
+                        "retrieval); each result's `spans` cite the matched passages by character offset."
+                    ),
+                },
                 "filters": {
                     "type": "object",
                     "description": (

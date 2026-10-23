@@ -123,6 +123,8 @@ def _call_tool(name: str, arguments: dict, engine: LocusEngine | None = None) ->
                 mode=arguments.get("mode"),
                 track=bool(arguments.get("track", True)),
                 filters=arguments.get("filters") or None,
+                expansion=arguments.get("expansion") or None,
+                parent=arguments.get("parent") or None,
             )
             return {
                 "intent": intent.value if intent else "auto",
@@ -132,8 +134,9 @@ def _call_tool(name: str, arguments: dict, engine: LocusEngine | None = None) ->
                         "doc_path": c.doc_path,
                         "score": round(c.score, 4),
                         "provenance": c.provenance,
-                        "content": c.content if full_content else c.content[:600],
+                        "content": c.content if (full_content or c.spans) else c.content[:600],
                         "entities": c.entities or [],
+                        **({"spans": c.spans} if c.spans else {}),
                     }
                     for c in chunks
                 ],

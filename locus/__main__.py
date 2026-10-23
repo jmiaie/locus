@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 
 def _cli_filters(args) -> dict | None:
@@ -40,6 +41,13 @@ def main() -> None:
     p_index = sub.add_parser("index", help="Index a file or directory")
     p_index.add_argument("path")
     p_index.add_argument("--pattern", default="**/*.md")
+    p_index.add_argument("--chunk-words", type=int, default=None,
+                         help="Chunk size in words (default 400; stored with the index)")
+    p_index.add_argument("--overlap-words", type=int, default=None, help="Window overlap (default 50)")
+    p_index.add_argument("--heading-context", action="store_true", default=None,
+                         help="Prefix every chunk with its heading path")
+    p_index.add_argument("--boundaries", choices=["words", "lines"], default=None,
+                         help="End windows at line breaks when possible (lines) or fixed word counts (words)")
 
     p_ret = sub.add_parser("retrieve", help="Retrieve context for a query")
     p_ret.add_argument("query")
@@ -51,6 +59,10 @@ def main() -> None:
     p_ret.add_argument("--track", action="store_true",
                        help="Record hits in the hot-context bulletin")
     p_ret.add_argument("--raw", action="store_true", help="Output JSON")
+    p_ret.add_argument("--expand", choices=["rm3"], default=None,
+                       help="LLM-free query expansion: RM3 pseudo-relevance feedback")
+    p_ret.add_argument("--parent", choices=["section", "doc"], default=None,
+                       help="Return the enclosing section/document of matched chunks, with cited spans")
     p_ret.add_argument("--llm", choices=["rewrite", "multi", "hyde"], default=None,
                        help="Optional LLM query transformation (needs OPENROUTER_API_KEY or "
                             "OPENAI_API_KEY[/OPENAI_BASE_URL]; makes network calls)")
@@ -296,7 +308,18 @@ def main() -> None:
         return
 
     from .core import LocusEngine
-    engine = LocusEngine(store_path=args.store)
+    chunking = None
+    if args.cmd == "index":
+        opts = {"chunk_words": args.chunk_words, "overlap_words": args.overlap_words,
+                "heading_context": args.heading_context, "boundaries": args.boundaries}
+        opts = {k: v for k, v in opts.items() if v is not None}
+        if opts:
+            from .memory.chunker import normalize_chunking
+            from .memory.corpus import Corpus
+            # Start from the store's current settings, then apply the flags.
+            current = Corpus(Path(args.store) / "corpus").chunking
+            chunking = normalize_chunking({**current, **opts})
+    engine = LocusEngine(store_path=args.store, chunking=chunking)
 
     # ----------------------------------------------------------------
     # Engine commands
@@ -314,7 +337,8 @@ def main() -> None:
                 client = OpenAICompatibleClient.from_env()
                 chunks = llm_retrieve(engine, args.query, strategy=args.llm, client=client,
                                       limit=args.limit, as_of=args.as_of, use_links=not args.no_links,
-                                      mode=args.mode, filters=_cli_filters(args))
+                                      mode=args.mode, filters=_cli_filters(args),
+                                      expansion=args.expand, parent=args.parent)
             except LLMError as e:
                 raise SystemExit(f"LLM error: {e}")
             print(f"[llm] {args.llm} usage: {json.dumps(client.usage)}", file=sys.stderr)
@@ -327,12 +351,15 @@ def main() -> None:
                 mode=args.mode,
                 track=args.track,
                 filters=_cli_filters(args),
+                expansion=args.expand,
+                parent=args.parent,
             )
         if args.raw:
             print(json.dumps([
                 {"chunk_id": c.chunk_id, "doc_path": c.doc_path,
                  "score": round(c.score, 4), "provenance": c.provenance,
-                 "content": c.content[:400]}
+                 "content": c.content[:400] if not c.spans else c.content,
+                 **({"spans": c.spans} if c.spans else {})}
                 for c in chunks
             ], indent=2))
         else:
