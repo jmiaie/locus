@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — optional cross-encoder reranking
+- **`locus[rerank]` extra** (`sentence-transformers`). `locus.rerank.CrossEncoderReranker` reranks the BM25 top-k with a local cross-encoder (default `cross-encoder/ms-marco-MiniLM-L-6-v2`, CPU).
+  - Use it as `LocusEngine(reranker=...)` or `locus retrieve --rerank [--rerank-depth N --rerank-model M]`.
+  - It is opt-in: NFCorpus improves by +0.018 nDCG@10 (significant), other benchmarks are not significantly changed, and it costs about 400 ms per query on CPU.
+  - The core never imports it.
+
 ### Added — chunking options, parent-child retrieval, RM3 (all opt-in; see docs/COMPARISON.md)
 - **Chunking options.** `LocusEngine(chunking={...})` / `locus index --chunk-words --overlap-words --heading-context --boundaries` / `LOCUS_CHUNKING`. The settings are stored with the index, and changing them re-chunks on the next `index()`. With no options set, chunks are byte-identical to before.
 - **Parent sections.** Sections are stored as parents. `retrieve(..., parent="section"|"doc")` returns the enclosing section or document, with cited character `spans`.
