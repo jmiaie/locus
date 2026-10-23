@@ -241,6 +241,7 @@ All storage is SQLite — no external databases, no servers, no configuration.
   - NFCorpus: +0.014 nDCG@10 (significant).
   - Neutral elsewhere.
   - About 5–10× BM25 latency.
+- **Cross-encoder reranking** (optional `locus[rerank]` extra) — reranks the BM25 top-k with a local MiniLM cross-encoder. NFCorpus +0.018 (significant); about 400 ms/query on CPU. Opt-in.
 - **Symlink-safe indexing** — directory indexing skips symlinks by default, so it never reads outside the indexed tree. Opt in with `follow_symlinks="inside"` or `True` (equivalently `--follow-symlinks inside|all`, or `LOCUS_FOLLOW_SYMLINKS`).
 - **Temporal retrieval** — `as_of="2024-01-01"` returns only facts valid on that date
 - **Query intent routing** (hybrid) — auto-classifies `kg_first` / `bm25_first` / `balanced` and shifts re-rank weights
@@ -343,6 +344,27 @@ Settings were tuned on dev splits only. None was significantly better without a 
 - **Chunking options:** no significant change on the BEIR test splits. On LongMemEval R@5 they are slightly worse (not significant).
 - **Parent-child retrieval:** worth using for *what it returns*: a full section with cited spans instead of a fragment. With 100-word children it is significantly worse on LongMemEval R@5 (−0.017).
 - **RM3:** significantly better on NFCorpus (+0.0136 nDCG@10) and neutral on SciFact, LongMemEval and the construction demo. It costs 5–10× BM25 latency, roughly 10–20 ms instead of 2–3 ms.
+
+### Cross-encoder reranking (optional extra)
+
+```bash
+pip install "locus[rerank]"     # sentence-transformers + PyTorch; the Locus core stays dependency-free
+locus retrieve "statin muscle pain" --rerank --rerank-depth 20
+```
+```python
+from locus.rerank import CrossEncoderReranker
+engine = LocusEngine(".locus", reranker=CrossEncoderReranker(depth=20))   # cross-encoder/ms-marco-MiniLM-L-6-v2, CPU
+engine.retrieve("statin muscle pain")                 # BM25 top-20 reranked
+engine.retrieve("statin muscle pain", rerank=False)   # plain BM25
+```
+
+**Measured result** (depth 20 tuned on dev; CPU with 2 threads):
+- **Quality:** NFCorpus +0.0179 nDCG@10 (significant). SciFact, LongMemEval R@5 and the construction demo are not significantly changed.
+- **Cost:** about **400 ms per query instead of 2–3 ms**, and about 750 MB RSS.
+
+It is opt-in. Use it where a few hundred milliseconds is acceptable, or on a GPU.
+
+The model is downloaded from the Hugging Face Hub on first use; after that, set `HF_HUB_OFFLINE=1`. Hub telemetry is disabled by default.
 
 ### LLM query transformations (optional)
 

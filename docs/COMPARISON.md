@@ -254,6 +254,7 @@ The CPU-only torch wheel would shrink the semantic installs, but the default `pi
 | Structure-aware chunking options (size/overlap, heading-path context, line/paragraph boundaries) | shipped | opt-in | no significant gain; see below |
 | Parent-child retrieval (`parent="section"\|"doc"`, cited spans) | shipped | opt-in | LME R@5 significantly worse with 100-word children; the value is the returned context |
 | RM3 pseudo-relevance feedback (`expansion="rm3"`) | shipped | opt-in | NFCorpus +0.0136 (significant); neutral elsewhere; 5–10× latency |
+| Cross-encoder reranking (`locus[rerank]`, ms-marco-MiniLM-L-6-v2, CPU) | shipped as optional extra | opt-in | NFCorpus +0.0179 (significant); neutral elsewhere; ~400 ms/query |
 | Symlink-safe indexing (skip symlinks by default; `inside` / `all` opt-in) | shipped (bug fix) | **default** | correctness-tested |
 
 Comparison with other systems' filtering:
@@ -290,3 +291,30 @@ Raw summary: `benchmarks/published/2026-10-23-ragpack/summary.json`.
 - Parent-child's doc-level ranking equals small-chunk retrieval, which is worse on LongMemEval. Use it for the larger, cited context it returns, not for ranking quality.
 
 The construction demo has n=21, so a +1-question change is within noise.
+
+### Pack 3/3: cross-encoder reranking (measured 2026-10-23)
+
+- **Model:** `cross-encoder/ms-marco-MiniLM-L-6-v2` via sentence-transformers 6.2.0 and torch 2.14.1 (CPU, 2 threads, max_length 256). It reranks the BM25 top-*depth* chunks.
+- **Depth tuning (dev).** Each dev query was scored once at depth 100, and smaller depths were simulated from that pass.
+
+| Depth | SciFact dev Δ | NFCorpus dev Δ |
+|---|---|---|
+| 10 | +0.0039 (ns) | +0.0085 (sig.) |
+| 20 | +0.0053 (ns) | +0.0210 (sig.) |
+| 30 | +0.0031 (ns) | +0.0211 (sig.) |
+| 50 | +0.0044 (ns) | +0.0216 (sig.) |
+| 100 | +0.0043 (ns) | +0.0205 (sig.) |
+
+Depth 20 had the best dev mean and is the cheapest, so it was selected.
+
+**Test results with depth 20.** These are real engine runs, compared with the same baseline as above.
+
+| | SciFact nDCG@10 | NFCorpus nDCG@10 | LME R@5 | Construction R@5 |
+|---|---|---|---|---|
+| Baseline | 0.6810 | 0.3286 | 0.9766 | 0.952 |
+| + CE rerank@20 | 0.6854 (+0.0043 [−0.0226, +0.0315], ns) | 0.3465 (**+0.0179 [+0.0074, +0.0287], sig.**) | 0.9787 (+0.0021 [−0.0106, +0.0170], ns) | 0.952 (0, ns) |
+| p50 latency | 3.1 → 409 ms | 1.6 → 394 ms | 2.0 → 414 ms | 0.6 → 350 ms |
+
+- **Peak RSS:** about 700–755 MB, compared with under 100 MB for core Locus.
+- **Decision: opt-in.** Only NFCorpus improves significantly, and the latency cost is about 130–550×.
+- **Dependencies:** it is an optional extra; the core stays zero-dependency.

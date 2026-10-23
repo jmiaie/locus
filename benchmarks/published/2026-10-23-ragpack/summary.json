@@ -1403,6 +1403,31 @@
      "worse": 14,
      "latency_ratio_p50": 6.51
     }
+   },
+   "t_rr20": {
+    "metric": "nDCG@10",
+    "n": 300,
+    "value": 0.6854,
+    "ci": [
+     0.6413,
+     0.7291
+    ],
+    "p50_ms": 409.24,
+    "p95_ms": 431.67,
+    "index_s": 3.18,
+    "store_mb": 32.08,
+    "chunks": 5332,
+    "vs_base": {
+     "diff": 0.0043,
+     "ci": [
+      -0.0226,
+      0.0315
+     ],
+     "sig": false,
+     "better": 57,
+     "worse": 48,
+     "latency_ratio_p50": 131.56
+    }
    }
   },
   "nfcorpus_test": {
@@ -1518,6 +1543,31 @@
      "better": 64,
      "worse": 36,
      "latency_ratio_p50": 9.57
+    }
+   },
+   "t_rr20": {
+    "metric": "nDCG@10",
+    "n": 323,
+    "value": 0.3465,
+    "ci": [
+     0.3118,
+     0.3814
+    ],
+    "p50_ms": 394.18,
+    "p95_ms": 422.35,
+    "index_s": 2.23,
+    "store_mb": 24.32,
+    "chunks": 3715,
+    "vs_base": {
+     "diff": 0.0179,
+     "ci": [
+      0.0074,
+      0.0287
+     ],
+     "sig": true,
+     "better": 97,
+     "worse": 67,
+     "latency_ratio_p50": 248.86
     }
    }
   },
@@ -1640,6 +1690,32 @@
      "worse": 1,
      "latency_ratio_p50": 5.09
     }
+   },
+   "t_rr20": {
+    "metric": "R@5",
+    "n": 470,
+    "value": 0.9787,
+    "ci": [
+     0.9638,
+     0.9915
+    ],
+    "p50_ms": 414.14,
+    "p95_ms": 467.69,
+    "index_s": 98.3,
+    "store_mb": null,
+    "chunks": null,
+    "MRR": 0.9399,
+    "vs_base": {
+     "diff": 0.0021,
+     "ci": [
+      -0.0106,
+      0.017
+     ],
+     "sig": false,
+     "better": 6,
+     "worse": 5,
+     "latency_ratio_p50": 206.67
+    }
    }
   },
   "construction": {
@@ -1761,6 +1837,32 @@
      "worse": 0,
      "latency_ratio_p50": 4.65
     }
+   },
+   "t_rr20": {
+    "metric": "R@5",
+    "n": 21,
+    "value": 0.9524,
+    "ci": [
+     0.8571,
+     1.0
+    ],
+    "p50_ms": 350.01,
+    "p95_ms": 419.32,
+    "index_s": 0.02,
+    "store_mb": null,
+    "chunks": null,
+    "MRR": 0.7952,
+    "vs_base": {
+     "diff": 0.0,
+     "ci": [
+      -0.1429,
+      0.1429
+     ],
+     "sig": false,
+     "better": 1,
+     "worse": 1,
+     "latency_ratio_p50": 547.06
+    }
    }
   }
  },
@@ -1799,11 +1901,20 @@
      "orig_weight": 0.9
     }
    }
+  },
+  "t_rr20": {
+   "rerank": {
+    "model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "depth": 20,
+    "threads": 2,
+    "max_length": 256
+   }
   }
  },
  "notes": [
   "rr_d* dev rows: one depth-100 cross-encoder pass per query, depth d simulated offline; ms = CE time x d/100 (2 CPU threads)",
   "rm3 dev latencies before the score_terms speed-up are inflated (first SciFact rows); test latencies are after it",
-  "Construction n=21: paired CIs are very wide"
+  "Construction n=21: paired CIs are very wide",
+  "t_rr20: real engine path (LocusEngine(reranker=CrossEncoderReranker(depth=20, threads=2))), CPU, 2 torch threads, torch 2.14.1+cpu, sentence-transformers 6.2.0; peak RSS in meta files"
  ]
 }
