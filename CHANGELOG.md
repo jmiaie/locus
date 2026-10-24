@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+---
+
+## [1.1.0] — 2026-10-24
+
+First release since 1.0.0. Everything listed below ships in this version. Upgrading is API-compatible, but two
+defaults change results: the SQLite FTS5 backend with Porter stemming + English stop-words, and BM25 as the default
+retrieval mode. Existing stores migrate on first open (one-way; see "Stores migrate automatically").
+
+### Added — LLM query-transform benchmark (2026-10-23)
+- **Measured `locus.llm` against a real endpoint** (`openai/gpt-4o-mini` via OpenRouter, temperature 0, all BEIR test queries, paired bootstrap B=10,000). NFCorpus nDCG@10: rewrite 0.347 (+0.018), multi-query 0.350 (+0.021), HyDE 0.359 (+0.030), all significant. SciFact: none significant (+0.003 to +0.008). Added latency about 0.8–2 s per query; $0.015–0.076 per 1,000 queries. Artefacts, including the exact LLM outputs, are in `benchmarks/published/2026-10-23-llm/`. The plugin stays opt-in.
+- **Packaging metadata:** `Documentation` and `Benchmarks` project URLs, `Operating System :: OS Independent` and `Topic :: Text Processing :: Indexing` classifiers.
+
 ### Added — optional cross-encoder reranking
 - **`locus[rerank]` extra** (`sentence-transformers`). `locus.rerank.CrossEncoderReranker` reranks the BM25 top-k with a local cross-encoder (default `cross-encoder/ms-marco-MiniLM-L-6-v2`, CPU).
   - Use it as `LocusEngine(reranker=...)` or `locus retrieve --rerank [--rerank-depth N --rerank-model M]`.
@@ -24,7 +36,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added — metadata filters and optional LLM query transformations
 - **`retrieve(..., filters=...)`.** Filters by path glob (include/exclude), frontmatter `type`, tags (all/any), `date` range, point-in-time `as_of` (honours `supersedes`) and custom frontmatter fields (`eq ne in nin gt gte lt lte contains exists`). Available in the API, the CLI (`--path --exclude-path --type --tag --any-tag --date-from --date-to --in-force --meta --filters`) and the `locus_retrieve` MCP tool (`filters`). Filtering happens after ranking with a deepening candidate pool, so scores are unchanged and up to `limit` matches are returned whenever they exist. `LocusEngine.filter_matches()` and `Corpus.doc_frontmatter()` / `supersedes_index()` are new helpers.
-- **`locus.llm`.** Provider-agnostic `rewrite`, `multi` (RRF) and `hyde` query transformations over any OpenAI-compatible endpoint (`OPENROUTER_API_KEY`, or `OPENAI_API_KEY` + `OPENAI_BASE_URL`). Standard library only, with usage accounting, a token cap and memoisation. Available as `locus retrieve --llm`. It is opt-in and never imported by the core. Tested with a mock transport; the quality benchmark is pending until an API key is available.
+- **`locus.llm`.** Provider-agnostic `rewrite`, `multi` (RRF) and `hyde` query transformations over any OpenAI-compatible endpoint (`OPENROUTER_API_KEY`, or `OPENAI_API_KEY` + `OPENAI_BASE_URL`). Standard library only, with usage accounting, a token cap and memoisation. Available as `locus retrieve --llm`. It is opt-in and never imported by the core. Benchmarked on 2026-10-23 (see above).
 
 ### Added — on-prem packaging and a construction demo
 - **Container image.** `Dockerfile` builds a slim image from the local wheel with `pip --no-index`. The base `python:3.12-slim` is pinned by digest. The image runs as non-root uid 10001, works with a read-only rootfs, has a `/health` HEALTHCHECK and stops cleanly on SIGTERM. `deploy/docker-compose.yml` publishes on host loopback only and uses a token secret, `read_only`, `cap_drop: ALL`, `no-new-privileges` and limits.
@@ -58,7 +70,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed — benchmark claims
 - **Removed unreproduced numbers.** The README's Engineering Wiki claim (six-signal R@5 0.947 / MRR 0.633) reproduced at 0.867 / 0.594 on 1.0.0 and has been replaced with BEIR SciFact/NFCorpus nDCG@10 with 95% CIs against `rank_bm25`, scaling to 100k docs, and a 5-run determinism check. Locus BM25 is at parity with `rank_bm25` (SciFact 0.668 vs 0.664, NFCorpus 0.306 vs 0.308; differences not significant) and beats the 1.0.0 default by +0.087 / +0.022.
 - **`benchmarks/README.md`** documents datasets, protocol and the exact commands; scripts are in `benchmarks/repro/`, summaries in `benchmarks/published/2026-10-20/`.
-- **uvx note.** The published 1.0.0 wheel has no `locus-rag` script, so the README shows `uvx --from locus-rag locus mcp` until the next release; `server.json` already targets that release.
+- **uvx note.** The 1.0.0 wheel has no `locus-rag` script; from 1.1.0 `uvx locus-rag mcp` (as in `server.json`) works. On 1.0.0 use `uvx --from locus-rag locus mcp`.
 
 ### Security
 - **HTTP server binds `127.0.0.1` by default** (was `0.0.0.0`). Binding any non-loopback host now requires `--token`; `serve()` / `make_server()` raise `ValueError` otherwise. Token comparison is constant-time. `/tools` now requires the token when one is set.
