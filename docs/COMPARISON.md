@@ -247,10 +247,13 @@ The CPU-only torch wheel would shrink the semantic installs, but the default `pi
 
 ## RAG feature pack (2026-10-23)
 
+> **LLM-memory head-to-head (mem0, Zep/Graphiti, Letta, LangMem): still pending.** The scored run
+> has not been done, so no numbers are reported for those systems here.
+
 | Feature | Status in Locus | Default? | Quality result |
 |---|---|---|---|
 | Metadata filtering (path glob, type, tags, date range, `as_of` with `supersedes`, custom fields) in API / CLI / MCP | shipped | always available (no filter = unchanged results) | correctness-tested only; filters never change scores |
-| LLM query rewriting / multi-query (RRF) / HyDE via any OpenAI-compatible endpoint | shipped as optional plugin (`locus.llm`) | opt-in | **pending**: no API key was available, so it has not been benchmarked |
+| LLM query rewriting / multi-query (RRF) / HyDE via any OpenAI-compatible endpoint | shipped as optional plugin (`locus.llm`) | opt-in | measured 2026-10-23 (`gpt-4o-mini`): NFCorpus rewrite +0.018, multi +0.021, HyDE +0.030 (all sig.); SciFact ns; +0.8–2 s/query. See [`benchmarks/published/2026-10-23-llm/`](../benchmarks/published/2026-10-23-llm/README.md) |
 | Structure-aware chunking options (size/overlap, heading-path context, line/paragraph boundaries) | shipped | opt-in | no significant gain; see below |
 | Parent-child retrieval (`parent="section"\|"doc"`, cited spans) | shipped | opt-in | LME R@5 significantly worse with 100-word children; the value is the returned context |
 | RM3 pseudo-relevance feedback (`expansion="rm3"`) | shipped | opt-in | NFCorpus +0.0136 (significant); neutral elsewhere; 5–10× latency |

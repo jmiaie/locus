@@ -7,8 +7,8 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-301%20passing-brightgreen?logo=pytest&logoColor=white)](tests/)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-468%20passing-brightgreen?logo=pytest&logoColor=white)](tests/)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)](pyproject.toml)
 [![MCP Compatible](https://img.shields.io/badge/MCP-compatible-blueviolet)](https://modelcontextprotocol.io)
 [![47 MCP Tools](https://img.shields.io/badge/MCP%20tools-47-blueviolet)](#mcp-tools)
@@ -198,7 +198,7 @@ Locus is three layers — memory, retrieval, and interface — with no layer dep
 │  Interface Layer                                                  │
 │  ┌────────────────┐  ┌──────────────────┐  ┌─────────────────┐  │
 │  │  CLI (locus)   │  │  MCP stdio server│  │  HTTP JSON-RPC  │  │
-│  │  41 commands   │  │  47 tools        │  │  POST /rpc      │  │
+│  │  42 commands   │  │  47 tools        │  │  POST /rpc      │  │
 │  │                │  │  4 prompts       │  │  Bearer token   │  │
 │  │                │  │  resources       │  │  CORS opt-in    │  │
 │  └────────────────┘  └──────────────────┘  └─────────────────┘  │
@@ -253,7 +253,8 @@ All storage is SQLite — no external databases, no servers, no configuration.
   matches are found. See [Metadata filters](#metadata-filters).
 - **Optional LLM query rewriting** — `rewrite`, `multi` (RRF merge) and HyDE through any OpenAI-compatible
   endpoint (`locus.llm`, `locus retrieve --llm multi`). Off by default and never imported by the core.
-  Benchmark: **pending**, since no API key was available. See [LLM query transformations](#llm-query-transformations-optional).
+  With `gpt-4o-mini`, HyDE reaches NFCorpus nDCG@10 0.359 (+0.030, significant); none of the three is significant on SciFact.
+  Costs about 0.8–2 s and $0.02–0.08 per 1,000 queries. See [LLM query transformations](#llm-query-transformations-optional).
 
 ### Knowledge Graph
 - **Prose triple extraction** — 14 relation patterns (`leads`, `works_at`, `is_a`, `part_of`, `replaced`, `depends_on`...) auto-run during indexing — no annotation required
@@ -348,7 +349,7 @@ Settings were tuned on dev splits only. None was significantly better without a 
 ### Cross-encoder reranking (optional extra)
 
 ```bash
-pip install "locus[rerank]"     # sentence-transformers + PyTorch; the Locus core stays dependency-free
+pip install "locus-rag[rerank]" # sentence-transformers + PyTorch; the Locus core stays dependency-free
 locus retrieve "statin muscle pain" --rerank --rerank-depth 20
 ```
 ```python
@@ -390,8 +391,20 @@ The original query is always retrieved too, and the lists are merged with RRF (k
 - Works with any OpenAI-compatible server, including local ones (vLLM, llama.cpp, Ollama).
 - The core never imports `locus.llm` and makes no network calls.
 
-**Quality is not measured yet.** No API key was available on the benchmark machine, so the benchmark is pending.
-The code is covered by mock-transport unit tests only.
+**Measured 2026-10-23** with `openai/gpt-4o-mini` via OpenRouter, temperature 0, all BEIR test queries
+(SciFact n=300, NFCorpus n=323), paired bootstrap B=10,000. Full table and the exact LLM outputs (so the run
+reproduces without an API key) are in [`benchmarks/published/2026-10-23-llm/`](benchmarks/published/2026-10-23-llm/README.md).
+
+| Strategy | SciFact nDCG@10 (Δ) | NFCorpus nDCG@10 (Δ) | Added p50 latency | $ / 1k queries |
+|---|---|---|---|---|
+| default (no LLM) | 0.681 | 0.329 | – | 0 |
+| `rewrite` | 0.689 (+0.008, ns) | 0.347 (**+0.018, sig.**) | ~0.85 s | $0.015–0.019 |
+| `multi` (3) | 0.684 (+0.003, ns) | 0.350 (**+0.021, sig.**) | ~1.1–1.4 s | $0.032–0.048 |
+| `hyde` | 0.689 (+0.008, ns) | **0.359 (+0.030, sig.)** | ~1.9–2.1 s | $0.072–0.076 |
+
+The transforms help on short, vocabulary-mismatched queries (NFCorpus) and are neutral on long, precise claims
+(SciFact). LongMemEval results for the transforms are not measured yet. Numbers depend on the model; re-measure
+with yours.
 
 ---
 
@@ -568,7 +581,7 @@ Locus Doctor
 [WARN]  bulletin             Tier 0 (pinned) is full — oldest entries will be demoted
 [PASS]  entity_resolver      14 aliases registered
 [PASS]  store_size           3.21 MB at .locus
-[PASS]  version              Locus v1.0.0
+[PASS]  version              Locus v1.1.0
 
 Result: 5 pass  1 warn  0 fail
 ```
@@ -576,6 +589,24 @@ Result: 5 pass  1 warn  0 fail
 ---
 
 ## Benchmark Results
+
+### At a glance
+
+| What | Result | Data / n | Source |
+|---|---|---|---|
+| Default retrieval quality (BM25 + `porter+english`) | SciFact nDCG@10 **0.681**, NFCorpus **0.329**, LongMemEval-S R@5 **0.977** | BEIR test (300 / 323 q), LME-S (470 q) | [2026-10-21-analyzer](benchmarks/published/2026-10-21-analyzer/README.md) |
+| Search latency at 100k docs | p50 **93 ms** (was 19.0 s BM25-only / 54.6 s six-signal in 1.0.0) | synthetic Zipf corpus, 100 q | [2026-10-20](benchmarks/published/2026-10-20/scaling_before_after.csv) |
+| Index build / store at 100k docs | 34 s / 419 MB (was 21.7 min / 1,324 MB) | same | [2026-10-20](benchmarks/published/2026-10-20/scaling_before_after.csv) |
+| RM3 expansion (opt-in) | NFCorpus **+0.0136** (sig.), neutral elsewhere, 5–10× latency | BEIR test, LME-S, demo | [2026-10-23-ragpack](benchmarks/published/2026-10-23-ragpack/summary.json) |
+| Cross-encoder rerank (opt-in extra) | NFCorpus **+0.0179** (sig.), neutral elsewhere, ~400 ms/query | same | [2026-10-23-ragpack](benchmarks/published/2026-10-23-ragpack/summary.json) |
+| LLM HyDE (opt-in, `gpt-4o-mini`) | NFCorpus **0.359 (+0.030, sig.)**; SciFact +0.008 (ns) | BEIR test | [2026-10-23-llm](benchmarks/published/2026-10-23-llm/README.md) |
+| Construction demo (synthetic, workflow demo) | R@5 0.952 (1.000 on point-in-time questions with as-of) | 24 docs, 21 q | [examples/construction](examples/construction/) |
+| Head-to-head vs mem0 / Zep / Letta / LangMem | **pending** — not run yet; no numbers are claimed | – | – |
+
+"sig." means the 95% paired-bootstrap CI of the difference excludes 0; "ns" means it does not. Latencies are from a
+shared 8-vCPU VM and are indicative only.
+
+### Details
 
 Every number below is reproducible with the scripts in [`benchmarks/repro/`](benchmarks/repro/);
 methodology, data sources and caveats are in [`benchmarks/README.md`](benchmarks/README.md).
@@ -689,8 +720,8 @@ pip install locus-rag          # macOS / Linux: python3 -m pip install locus-rag
 ```
 
 Locus is also described for the MCP registry in [`server.json`](server.json) (`uvx locus-rag mcp --store PATH`).
-The `locus-rag` console script that command needs is not in the 1.0.0 wheel on PyPI; until the next release,
-run `uvx --from locus-rag locus mcp` instead (verified against 1.0.0).
+Since 1.1.0 the wheel installs both a `locus` and a `locus-rag` console script (same CLI). On 1.0.0, which has
+only `locus`, use `uvx --from locus-rag locus mcp`.
 
 **Zero runtime dependencies.** Locus uses only Python stdlib: `sqlite3`, `re`, `pathlib`, `threading`, `http.server`, `hashlib`, `math`, `json`.
 
@@ -700,6 +731,7 @@ Optional extras:
 pip install "locus-rag[ompa]"   # OMPA vault bridge
 pip install "locus-rag[dev]"    # pytest, coverage
 pip install "locus-rag[bench]"  # rank_bm25 baseline for benchmarks
+pip install "locus-rag[rerank]" # optional cross-encoder reranker (sentence-transformers + PyTorch)
 ```
 
 **Requirements:** Python 3.11+

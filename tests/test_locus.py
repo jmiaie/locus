@@ -2480,7 +2480,7 @@ def test_github_bridge_matches():
 def test_version_is_0_8_0():
     # Retained for history; version is now 1.0.0
     from locus.core import __version__
-    assert __version__ == "1.0.0"
+    assert __version__ == "1.1.0"
 
 
 # -----------------------------------------------------------------------
@@ -2717,7 +2717,7 @@ def test_snapshot_inspect_missing(tmp_path):
 def test_version_is_0_9_0():
     # retained for history; version is now 1.0.0
     from locus.core import __version__
-    assert __version__ == "1.0.0"
+    assert __version__ == "1.1.0"
 
 
 # -----------------------------------------------------------------------
@@ -3027,7 +3027,7 @@ def test_engine_mark_relevant_irrelevant(tmp_path):
 
 def test_version_is_1_0_0():
     from locus.core import __version__
-    assert __version__ == "1.0.0"
+    assert __version__ == "1.1.0"
 
 
 # -----------------------------------------------------------------------
