@@ -54,7 +54,7 @@
 
 **Not run on this box (reason)**
 - **mem0 OSS, local mode** (infer=False with MiniLM and local Qdrant): **not run**, for memory and time. A heavy-process slot was not available and the run was stopped on instruction. The adapter was smoke-tested on 3 LME questions, but no scored run exists, so no number is reported.
-- **mem0 with LLM extraction, Zep/Graphiti, Letta, LangMem:** **not run: needs LLM API key.** Graphiti also needs a graph DB. No personal keys were used and nothing was signed up for. Their own published numbers are in section 3, marked as not reproduced and on different metrics.
+- **mem0 with LLM extraction, Zep/Graphiti, Letta, LangMem:** not run in this 2026-10-20 scorecard. They were run on 2026-10-24 on a fixed 30-question LME-S subset with `gpt-4o-mini`. See the head-to-head section below and [`benchmarks/published/2026-10-24-headtohead/`](../benchmarks/published/2026-10-24-headtohead/README.md).
 - **LanceDB:** install footprint only. Chroma was the vector-DB baseline.
 
 **Caveats**
@@ -174,10 +174,10 @@ Locus hybrid shares the BM25 index, so its build cost is the same index. In-memo
 
 | System | Status here | Their published number | Benchmark / metric (not comparable to R@5 or nDCG above unless stated) | Source |
 |---|---|---|---|---|
-| Zep (cloud) / Graphiti | not run: needs an LLM API key (graph construction) and a graph DB (Neo4j/FalkorDB) | 71.2% (gpt-4o), 63.8% (gpt-4o-mini); their full-context baseline 60.2% (gpt-4o) | LongMemEval-S end-to-end QA accuracy, GPT-4o judge (not retrieval R@5) | https://arxiv.org/abs/2501.13956 (Table 2) |
-| mem0 with LLM extraction (default infer=True) | not run: needs an LLM API key; a local LLM was not attempted (22,419 LME sessions each need extraction + update LLM calls, far beyond the CPU/time budget of this shared box). mem0 was run with infer=False instead (section 1) | 66.88% (Mem0), 68.44% (Mem0-graph); search p50 0.148 s | LoCoMo LLM-as-judge J (vendor paper; Zep disputes the Zep numbers in it) | https://arxiv.org/abs/2504.19413 (Table 2) |
-| Letta | not run: the agent loop needs an LLM API key | 74.0% (gpt-4o-mini, filesystem agent) | LoCoMo QA accuracy (vendor blog) | https://www.letta.com/blog/benchmarking-ai-agent-memory/ |
-| LangChain LLM memory (LangMem) | not run: needs an LLM API key (the LangChain BM25 retriever was run, section 1) | 58.10% | LoCoMo J, as measured by the mem0 authors (third party) | https://arxiv.org/abs/2504.19413 (Table 2) |
+| Zep (cloud) / Graphiti | Graphiti OSS: run 2026-10-24, **partial n, in progress** (see head-to-head); Zep cloud not run (needs a Zep key) | 71.2% (gpt-4o), 63.8% (gpt-4o-mini); their full-context baseline 60.2% (gpt-4o) | LongMemEval-S end-to-end QA accuracy, GPT-4o judge (not retrieval R@5) | https://arxiv.org/abs/2501.13956 (Table 2) |
+| mem0 with LLM extraction (default infer=True) | run 2026-10-24 on 30 LME-S questions with gpt-4o-mini: R@5 0.933, MRR 0.722 (see head-to-head) | 66.88% (Mem0), 68.44% (Mem0-graph); search p50 0.148 s | LoCoMo LLM-as-judge J (vendor paper; Zep disputes the Zep numbers in it) | https://arxiv.org/abs/2504.19413 (Table 2) |
+| Letta | 0.16.8 server: run 2026-10-24, **partial n, in progress** (see head-to-head) | 74.0% (gpt-4o-mini, filesystem agent) | LoCoMo QA accuracy (vendor blog) | https://www.letta.com/blog/benchmarking-ai-agent-memory/ |
+| LangChain LLM memory (LangMem) | run 2026-10-24 on 30 LME-S questions with gpt-4o-mini: R@5 0.767, MRR 0.606 (see head-to-head) | 58.10% | LoCoMo J, as measured by the mem0 authors (third party) | https://arxiv.org/abs/2504.19413 (Table 2) |
 | LongMemEval authors' retrievers | reference only | Recall@5: BM25 0.634, Contriever 0.723, Stella V5 1.5B 0.720 | LongMemEval-M (~500 sessions per question), session values, user turns only — harder than the -S setting used here | https://arxiv.org/abs/2410.10813 (Table 9) |
 
 Published reference points for the baselines that *were* run here (also not reproduced by us, listed for sanity):
@@ -247,8 +247,14 @@ The CPU-only torch wheel would shrink the semantic installs, but the default `pi
 
 ## RAG feature pack (2026-10-23)
 
-> **LLM-memory head-to-head (mem0, Zep/Graphiti, Letta, LangMem): still pending.** The scored run
-> has not been done, so no numbers are reported for those systems here.
+> **LLM-memory head-to-head (2026-10-24, LME-S, same 30 questions, `gpt-4o-mini`, MiniLM embeddings):**
+> - **Locus:** R@5 1.000, MRR 0.917.
+> - **OMPA:** R@5 1.000, MRR 0.967.
+> - **mem0:** R@5 0.933, MRR 0.722 (ΔMRR vs Locus −0.19, sig.).
+> - **LangMem:** R@5 0.767, MRR 0.606 (−0.31, sig.).
+> - **Zep (Graphiti OSS) and Letta:** in progress, with partial n.
+>
+> n=30 is low-power. Full table: [`benchmarks/published/2026-10-24-headtohead/`](../benchmarks/published/2026-10-24-headtohead/README.md).
 
 | Feature | Status in Locus | Default? | Quality result |
 |---|---|---|---|
