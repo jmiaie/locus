@@ -174,9 +174,9 @@ Locus hybrid shares the BM25 index, so its build cost is the same index. In-memo
 
 | System | Status here | Their published number | Benchmark / metric (not comparable to R@5 or nDCG above unless stated) | Source |
 |---|---|---|---|---|
-| Zep (cloud) / Graphiti | Graphiti OSS: run 2026-10-24, **partial n=11**: R@5 0.455, MRR 0.348 (see head-to-head); Zep cloud not run (needs a Zep key) | 71.2% (gpt-4o), 63.8% (gpt-4o-mini); their full-context baseline 60.2% (gpt-4o) | LongMemEval-S end-to-end QA accuracy, GPT-4o judge (not retrieval R@5) | https://arxiv.org/abs/2501.13956 (Table 2) |
+| Zep (cloud) / Graphiti | Graphiti OSS: run 2026-10-24, **partial n=11, paused**: R@5 0.455, MRR 0.348 (see head-to-head); Zep cloud not run (needs a Zep key) | 71.2% (gpt-4o), 63.8% (gpt-4o-mini); their full-context baseline 60.2% (gpt-4o) | LongMemEval-S end-to-end QA accuracy, GPT-4o judge (not retrieval R@5) | https://arxiv.org/abs/2501.13956 (Table 2) |
 | mem0 with LLM extraction (default infer=True) | run 2026-10-24 on 30 LME-S questions with gpt-4o-mini: R@5 0.933, MRR 0.722 (see head-to-head) | 66.88% (Mem0), 68.44% (Mem0-graph); search p50 0.148 s | LoCoMo LLM-as-judge J (vendor paper; Zep disputes the Zep numbers in it) | https://arxiv.org/abs/2504.19413 (Table 2) |
-| Letta | 0.16.8 server: run 2026-10-24, **partial n=4** (inconclusive; see head-to-head) | 74.0% (gpt-4o-mini, filesystem agent) | LoCoMo QA accuracy (vendor blog) | https://www.letta.com/blog/benchmarking-ai-agent-memory/ |
+| Letta | 0.16.8 server: run 2026-10-24, n=30: agent R@5 0.800, MRR 0.800; direct archival-search API R@5 1.000, MRR 0.957 (see head-to-head) | 74.0% (gpt-4o-mini, filesystem agent) | LoCoMo QA accuracy (vendor blog) | https://www.letta.com/blog/benchmarking-ai-agent-memory/ |
 | LangChain LLM memory (LangMem) | run 2026-10-24 on 30 LME-S questions with gpt-4o-mini: R@5 0.767, MRR 0.606 (see head-to-head) | 58.10% | LoCoMo J, as measured by the mem0 authors (third party) | https://arxiv.org/abs/2504.19413 (Table 2) |
 | LongMemEval authors' retrievers | reference only | Recall@5: BM25 0.634, Contriever 0.723, Stella V5 1.5B 0.720 | LongMemEval-M (~500 sessions per question), session values, user turns only — harder than the -S setting used here | https://arxiv.org/abs/2410.10813 (Table 9) |
 
@@ -252,10 +252,10 @@ The CPU-only torch wheel would shrink the semantic installs, but the default `pi
 > - **OMPA:** R@5 1.000, MRR 0.967.
 > - **mem0:** R@5 0.933, MRR 0.722 (ΔMRR vs Locus −0.19, sig.).
 > - **LangMem:** R@5 0.767, MRR 0.606 (−0.31, sig.).
-> - **Zep (Graphiti OSS), partial n=11:** R@5 0.455, MRR 0.348 (ΔMRR vs Locus −0.52, sig.). With the cosine floor removed: R@5 0.727, MRR 0.530 (−0.33, sig.).
-> - **Letta, partial n=4:** inconclusive.
+> - **Zep (Graphiti OSS), partial n=11, paused:** R@5 0.455, MRR 0.348 (ΔMRR vs Locus −0.52, sig.). With the cosine floor removed: R@5 0.727, MRR 0.530 (−0.33, sig.).
+> - **Letta 0.16.8, n=30:** agent R@5 0.800, MRR 0.800 (ΔMRR vs Locus −0.12, ns; vs OMPA −0.17, sig.). Its direct archival-search API (no LLM at query): R@5 1.000, MRR 0.957 (vs Locus +0.04, ns), which is a statistical tie.
 >
-> Both partial runs were stopped at the budget cap and are not extrapolated.
+> The Graphiti partial run was stopped at the budget cap (paused) and is not extrapolated.
 >
 > n=30 is low-power. Full table: [`benchmarks/published/2026-10-24-headtohead/`](../benchmarks/published/2026-10-24-headtohead/README.md).
 

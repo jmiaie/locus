@@ -1,11 +1,10 @@
 # 2026-10-24: LLM-memory head-to-head on LongMemEval-S (Locus, OMPA, mem0, LangMem, Graphiti/Zep OSS, Letta)
 
-**Status (final for this run):**
-- Locus, OMPA, mem0 and LangMem: complete (n=30).
-- **Graphiti (Zep OSS): partial, n=11.**
-- **Letta: partial, n=4.**
+**Status (updated 2026-10-24 evening):**
+- Locus, OMPA, mem0, LangMem and **Letta: complete (n=30)**. Letta's last 26 questions were finished on the same setup (`gpt-4o-mini` via OpenRouter, MiniLM embeddings, letta 0.16.8) for about $0.02.
+- **Graphiti (Zep OSS): partial, n=11, paused.** It was stopped at the run's LLM budget cap and is **not extrapolated**. Its deltas are paired on its own 11 questions. On those same 11 questions Locus scores R@5 1.000 / MRR 0.864, and OMPA 1.000 / 1.000. The remaining 19 questions need about $7–8 of `gpt-4o-mini` at list price and may be run later.
 
-Both partial systems were stopped at the run's $9.50 LLM budget cap and are **not extrapolated**. Their deltas are paired on their own question subsets. On the same 11 questions Locus scores R@5 1.000 / MRR 0.864, and OMPA 1.000 / 1.000. Total LLM spend for this head-to-head was about $7.6.
+Total LLM spend for this head-to-head was about $7.7.
 
 ## Design
 - **Data:** LongMemEval-S (cleaned), a fixed **30-question** subset with 5 per question type, seed 20261020 (`scripts/lme_subset30.json`). Every system gets the same questions.
@@ -28,8 +27,8 @@ Both partial systems were stopped at the run's $9.50 LLM budget cap and are **no
 | LangMem 0.0.30 (memory manager) | 30 | 0.767 [0.60, 0.90] | 0.567 | 0.606 | -0.311 [-0.461, -0.156] **sig** | -0.361 [-0.511, -0.211] **sig** | 57 ms | 238.2 s | $0.043 |
 | Graphiti 0.31.2 / Zep OSS (default `search`) | 11 | 0.455 [0.18, 0.73] | 0.182 | 0.348 | -0.515 [-0.758, -0.273] **sig** | -0.652 [-0.879, -0.394] **sig** | 69 ms | 361.3 s | $0.408 |
 | Graphiti, same graph, hybrid RRF with cosine floor removed | 11 | 0.727 [0.46, 1.00] | 0.455 | 0.530 | -0.333 [-0.606, -0.076] **sig** | -0.470 [-0.697, -0.242] **sig** | 74 ms | 361.3 s | incl. above |
-| Letta 0.16.8 agent (archival_memory_search tool calls) | 4 | 0.750 [0.25, 1.00] | 0.750 | 0.750 | -0.062 [-0.750, +0.562] ns | -0.250 [-0.750, +0.000] ns | 3,401 ms | 113.3 s | $0.001 |
-| Letta 0.16.8 archival search API (no LLM at query) | 4 | 1.000 [1.00, 1.00] | 1.000 | 1.000 | +0.188 [+0.000, +0.562] ns | +0.000 [+0.000, +0.000] ns | 267 ms | 113.3 s | incl. above |
+| Letta 0.16.8 agent (archival_memory_search tool calls) | 30 | 0.800 [0.63, 0.93] | 0.733 | 0.800 | -0.117 [-0.292, +0.042] ns | -0.167 [-0.317, -0.033] **sig** | 3,432 ms | 120.1 s | $0.001 |
+| Letta 0.16.8 archival search API (no LLM at query) | 30 | 1.000 [1.00, 1.00] | 1.000 | 0.957 | +0.040 [-0.063, +0.142] ns | -0.010 [-0.060, +0.040] ns | 270 ms | 120.1 s | incl. above |
 LLM $ per question = system spend ÷ scored questions. For Graphiti this includes the pilot and interrupted attempts. A clean run measured about $0.38 per question.
 
 ## Notes
@@ -43,4 +42,5 @@ LLM $ per question = system spend ÷ scored questions. For Graphiti this include
   - The archival-search tool was attached explicitly, because 0.16.8's default tool set lacks it.
   - Each session turn is one archival passage tagged with its session id.
   - "Agent" = the passages the agent retrieved through its own tool call. "Archival search API" = Letta's direct search endpoint.
+  - The agent made 0.97 archival-search calls per question on average. In 5 of 30 questions its tool call returned nothing usable, and those are its misses. The direct archival search API, with no LLM at query time, scores R@5 1.000 / MRR 0.957. That is statistically tied with Locus (+0.040 [-0.063, +0.142]) and OMPA (-0.010 [-0.060, +0.040]), at about 270 ms per query and about 2 minutes of ingest per haystack.
 - No API key appears anywhere here. The gateway reads it from the environment. Per-question rows are in `results/`.
