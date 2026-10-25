@@ -291,59 +291,61 @@
   "mean_episodes": 48.27
  },
  "letta": {
-  "n": 4,
-  "R@5": 0.75,
+  "n": 30,
+  "R@5": 0.8,
   "R@5_ci": [
-   0.25,
-   1.0
+   0.633,
+   0.933
   ],
-  "R@10": 0.75,
-  "Rall@5": 0.75,
-  "MRR@10": 0.75,
-  "query_p50_ms": 3401.4,
-  "ingest_p50_s_per_haystack": 113.3,
-  "llm_usd_total_incl_pilots": 0.0052,
-  "llm_calls": 14,
-  "prompt_tokens": 39234,
-  "completion_tokens": 686,
-  "usd_per_question": 0.0013,
+  "R@10": 0.8,
+  "Rall@5": 0.733,
+  "MRR@10": 0.8,
+  "query_p50_ms": 3432.2,
+  "ingest_p50_s_per_haystack": 120.1,
+  "llm_usd_total_incl_pilots": 0.0269,
+  "llm_calls": 67,
+  "prompt_tokens": 203184,
+  "completion_tokens": 3844,
+  "usd_per_question": 0.0009,
   "vs_locus": {
    "ref_R@5_same_q": 1.0,
-   "ref_MRR_same_q": 0.812,
-   "n": 4,
-   "diff": -0.062,
+   "ref_MRR_same_q": 0.917,
+   "n": 30,
+   "diff": -0.117,
    "ci": [
-    -0.75,
-    0.562
+    -0.292,
+    0.042
    ],
    "sig": false,
-   "better": 1,
-   "worse": 1
+   "better": 3,
+   "worse": 6
   },
   "vs_ompa": {
    "ref_R@5_same_q": 1.0,
-   "ref_MRR_same_q": 1.0,
-   "n": 4,
-   "diff": -0.25,
+   "ref_MRR_same_q": 0.967,
+   "n": 30,
+   "diff": -0.167,
    "ci": [
-    -0.75,
-    0.0
+    -0.317,
+    -0.033
    ],
-   "sig": false,
-   "better": 0,
-   "worse": 1
+   "sig": true,
+   "better": 1,
+   "worse": 6
   },
   "by_type_R@5": {
    "knowledge-update": 1.0,
-   "multi-session": 1.0,
-   "single-session-assistant": 0.0,
-   "single-session-preference": 1.0
+   "multi-session": 0.6,
+   "single-session-assistant": 0.6,
+   "single-session-preference": 0.8,
+   "single-session-user": 0.8,
+   "temporal-reasoning": 1.0
   },
-  "mean_archival_search_calls": 1.0,
-  "mean_passages": 495.75
+  "mean_archival_search_calls": 0.97,
+  "mean_passages": 501.8
  },
  "letta_direct": {
-  "n": 4,
+  "n": 30,
   "R@5": 1.0,
   "R@5_ci": [
    1.0,
@@ -351,46 +353,48 @@
   ],
   "R@10": 1.0,
   "Rall@5": 1.0,
-  "MRR@10": 1.0,
-  "query_p50_ms": 266.6,
-  "ingest_p50_s_per_haystack": 113.3,
-  "llm_usd_total_incl_pilots": 0.0052,
-  "llm_calls": 14,
-  "prompt_tokens": 39234,
-  "completion_tokens": 686,
+  "MRR@10": 0.957,
+  "query_p50_ms": 269.9,
+  "ingest_p50_s_per_haystack": 120.1,
+  "llm_usd_total_incl_pilots": 0.0269,
+  "llm_calls": 67,
+  "prompt_tokens": 203184,
+  "completion_tokens": 3844,
   "vs_locus": {
    "ref_R@5_same_q": 1.0,
-   "ref_MRR_same_q": 0.812,
-   "n": 4,
-   "diff": 0.188,
+   "ref_MRR_same_q": 0.917,
+   "n": 30,
+   "diff": 0.04,
    "ci": [
-    0.0,
-    0.562
+    -0.063,
+    0.142
    ],
    "sig": false,
-   "better": 1,
-   "worse": 0
+   "better": 4,
+   "worse": 2
   },
   "vs_ompa": {
    "ref_R@5_same_q": 1.0,
-   "ref_MRR_same_q": 1.0,
-   "n": 4,
-   "diff": 0.0,
+   "ref_MRR_same_q": 0.967,
+   "n": 30,
+   "diff": -0.01,
    "ci": [
-    0.0,
-    0.0
+    -0.06,
+    0.04
    ],
    "sig": false,
-   "better": 0,
-   "worse": 0
+   "better": 1,
+   "worse": 2
   },
   "by_type_R@5": {
    "knowledge-update": 1.0,
    "multi-session": 1.0,
    "single-session-assistant": 1.0,
-   "single-session-preference": 1.0
+   "single-session-preference": 1.0,
+   "single-session-user": 1.0,
+   "temporal-reasoning": 1.0
   },
-  "mean_archival_search_calls": 1.0,
-  "mean_passages": 495.75
+  "mean_archival_search_calls": 0.97,
+  "mean_passages": 501.8
  }
 }
