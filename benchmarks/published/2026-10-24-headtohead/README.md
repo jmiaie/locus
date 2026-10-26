@@ -1,10 +1,13 @@
-# 2026-10-24: LLM-memory head-to-head on LongMemEval-S (Locus, OMPA, mem0, LangMem, Graphiti/Zep OSS, Letta)
+# 2026-10-24 (Graphiti completed 2026-10-26): LLM-memory head-to-head on LongMemEval-S (Locus, OMPA, mem0, LangMem, Graphiti/Zep OSS, Letta)
 
-**Status (updated 2026-10-24 evening):**
-- Locus, OMPA, mem0, LangMem and **Letta: complete (n=30)**. Letta's last 26 questions were finished on the same setup (`gpt-4o-mini` via OpenRouter, MiniLM embeddings, letta 0.16.8) for about $0.02.
-- **Graphiti (Zep OSS): partial, n=11, paused.** It was stopped at the run's LLM budget cap and is **not extrapolated**. Its deltas are paired on its own 11 questions. On those same 11 questions Locus scores R@5 1.000 / MRR 0.864, and OMPA 1.000 / 1.000. The remaining 19 questions need about $7–8 of `gpt-4o-mini` at list price and may be run later.
+**Status (updated 2026-10-26):** every system is complete at **n=30**.
+- Locus, OMPA, mem0, LangMem and Letta were finished on 2026-10-24.
+- **Graphiti (Zep OSS)** was resumed on 2026-10-26 from question 12, with exactly the same configuration as the first 11: `gpt-4o-mini` via OpenRouter, default `add_episode`, local MiniLM embeddings, the Kuzu backend and the same workarounds. The resume cost $7.20 of OpenRouter usage. That includes about $0.48 lost to a local-gateway budget stop; the questions that failed with 402 were discarded and re-run.
+- In one Graphiti question (c9f37c46), 1 of 49 episodes failed because `gpt-4o-mini` returned truncated JSON. It is counted in `add_errors` and not dropped, which is the harness's original rule.
 
-Total LLM spend for this head-to-head was about $7.7.
+Total OpenRouter usage for this head-to-head is $15.02.
+
+A Graphiti run on Gemini (`gemini-3.5-flash-lite`, free tier) is in progress. It will be reported separately and labeled "different LLM, not directly comparable to the gpt-4o-mini rows".
 
 ## Design
 - **Data:** LongMemEval-S (cleaned), a fixed **30-question** subset with 5 per question type, seed 20261020 (`scripts/lme_subset30.json`). Every system gets the same questions.
@@ -25,11 +28,11 @@ Total LLM spend for this head-to-head was about $7.7.
 | OMPA (MiniLM + keyword) | 30 | 1.000 [1.00, 1.00] | 0.933 | 0.967 | +0.050 [-0.025, +0.142] ns | – | 25 ms | 9.6 s | $0 |
 | mem0 2.2.1 (LLM extraction, infer=True) | 30 | 0.933 [0.83, 1.00] | 0.867 | 0.722 | -0.194 [-0.300, -0.100] **sig** | -0.244 [-0.356, -0.144] **sig** | 100 ms | 228.2 s | $0.062 |
 | LangMem 0.0.30 (memory manager) | 30 | 0.767 [0.60, 0.90] | 0.567 | 0.606 | -0.311 [-0.461, -0.156] **sig** | -0.361 [-0.511, -0.211] **sig** | 57 ms | 238.2 s | $0.043 |
-| Graphiti 0.31.2 / Zep OSS (default `search`) | 11 | 0.455 [0.18, 0.73] | 0.182 | 0.348 | -0.515 [-0.758, -0.273] **sig** | -0.652 [-0.879, -0.394] **sig** | 69 ms | 361.3 s | $0.408 |
-| Graphiti, same graph, hybrid RRF with cosine floor removed | 11 | 0.727 [0.46, 1.00] | 0.455 | 0.530 | -0.333 [-0.606, -0.076] **sig** | -0.470 [-0.697, -0.242] **sig** | 74 ms | 361.3 s | incl. above |
+| Graphiti 0.31.2 / Zep OSS (default `search`) | 30 | 0.467 [0.30, 0.63] | 0.267 | 0.428 | -0.489 [-0.664, -0.317] **sig** | -0.539 [-0.717, -0.356] **sig** | 68 ms | 437.8 s | $0.390 |
+| Graphiti, same graph, hybrid RRF with cosine floor removed | 30 | 0.733 [0.57, 0.87] | 0.467 | 0.547 | -0.369 [-0.533, -0.214] **sig** | -0.419 [-0.578, -0.264] **sig** | 73 ms | 437.8 s | incl. above |
 | Letta 0.16.8 agent (archival_memory_search tool calls) | 30 | 0.800 [0.63, 0.93] | 0.733 | 0.800 | -0.117 [-0.292, +0.042] ns | -0.167 [-0.317, -0.033] **sig** | 3,432 ms | 120.1 s | $0.001 |
 | Letta 0.16.8 archival search API (no LLM at query) | 30 | 1.000 [1.00, 1.00] | 1.000 | 0.957 | +0.040 [-0.063, +0.142] ns | -0.010 [-0.060, +0.040] ns | 270 ms | 120.1 s | incl. above |
-LLM $ per question = system spend ÷ scored questions. For Graphiti this includes the pilot and interrupted attempts. A clean run measured about $0.38 per question.
+LLM $ per question = system spend ÷ scored questions. For Graphiti this includes the pilot and interrupted attempts: $11.68 total, 6,544 calls and 80.0M prompt tokens.
 
 ## Notes
 - **mem0** (`infer=True`, local Qdrant, spaCy and fastembed extras): 2 R@5 misses, both on preference questions. About 329 memories per haystack.
@@ -38,6 +41,7 @@ LLM $ per question = system spend ÷ scored questions. For Graphiti this include
   - Zep Cloud needs a separate Zep key, so Graphiti OSS was used instead.
   - The Kuzu backend in 0.31.2 needed two workarounds: the missing `_database` attribute, and creating the FTS indexes.
   - The default `search()` cosine floor (0.6) is tuned for OpenAI embeddings and returns few edges with MiniLM. The "floor removed" row searches the same graph without it.
+  - Graphiti R@5 by question type (default search, n=30): knowledge-update 0.6, multi-session 0.4, single-session-assistant 0.6, single-session-preference 0.4, single-session-user 0.0, temporal-reasoning 0.8. With the floor removed: 0.6 / 1.0 / 0.6 / 1.0 / 0.2 / 1.0.
 - **Letta**
   - The archival-search tool was attached explicitly, because 0.16.8's default tool set lacks it.
   - Each session turn is one archival passage tagged with its session id.

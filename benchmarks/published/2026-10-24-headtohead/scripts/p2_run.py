@@ -11,7 +11,10 @@ ap.add_argument("--limit", type=int); ap.add_argument("--subset", default="lme_s
 A = ap.parse_args()
 SUB = json.load(open(ROOT / A.subset)); tag = Path(A.subset).stem.replace("lme_subset", "lme")
 ROWS = {json.loads(l)["question_id"]: json.loads(l) for l in open("/workspace/stem/data/lme_s_470.jsonl")}
-OUT = RES / f"{tag}__{A.system}.jsonl"
+PROVIDER = os.environ.get("P2_PROVIDER", "openrouter")  # provider switch; default = original OpenRouter path, unchanged
+if PROVIDER == "gemini":  # Gemini free tier via gateway_gemini.py (127.0.0.1:8766); MiniLM embeddings served by the same gateway
+    GW = "http://127.0.0.1:8766"; MODEL = os.environ.get("P2_GEMINI_MODEL", "gemini-3.5-flash-lite")
+OUT = RES / (f"{tag}__{A.system}.jsonl" if PROVIDER == "openrouter" else f"{tag}__{A.system}_{PROVIDER}.jsonl")
 
 def dedup_sessions(sids, k=10):
     out = []
@@ -71,14 +74,19 @@ async def _graphiti(e, wd):
     from graphiti_core.embedder.openai import OpenAIEmbedder, OpenAIEmbedderConfig
     from graphiti_core.cross_encoder.openai_reranker_client import OpenAIRerankerClient
     from graphiti_core.nodes import EpisodeType
-    lc = LLMConfig(api_key="dummy", model=MODEL, small_model=MODEL, base_url=f"{GW}/or/graphiti/v1", temperature=0)
-    wd = str(ROOT / "graphiti_db" / e["question_id"]); Path(wd).mkdir(parents=True, exist_ok=True)
+    route = "or" if PROVIDER == "openrouter" else "gm"
+    lc = LLMConfig(api_key="dummy", model=MODEL, small_model=MODEL, base_url=f"{GW}/{route}/graphiti/v1", temperature=0)
+    wd = str(ROOT / ("graphiti_db" if PROVIDER == "openrouter" else f"graphiti_db_{PROVIDER}") / e["question_id"]); Path(wd).mkdir(parents=True, exist_ok=True)
+    llm_kw = {}
+    if PROVIDER != "openrouter":  # gateway may hold a request for hours until the free daily quota resets: no client timeout/retries
+        from openai import AsyncOpenAI
+        llm_kw["client"] = AsyncOpenAI(api_key="dummy", base_url=lc.base_url, timeout=None, max_retries=0)
     drv = KuzuDriver(db=str(Path(wd) / "kuzu")); drv._database = "u"   # workaround: 0.31.2 KuzuDriver lacks _database
     from graphiti_core.graph_queries import get_fulltext_indices
     from graphiti_core.driver.driver import GraphProvider
     for q in ["INSTALL fts", "LOAD fts"] + get_fulltext_indices(GraphProvider.KUZU):  # workaround: FTS indexes never created
         await drv.client.execute(q)
-    g = Graphiti(graph_driver=drv, llm_client=OpenAIGenericClient(config=lc),
+    g = Graphiti(graph_driver=drv, llm_client=OpenAIGenericClient(config=lc, **llm_kw),
                  embedder=OpenAIEmbedder(config=OpenAIEmbedderConfig(api_key="dummy", embedding_model="all-MiniLM-L6-v2", embedding_dim=384, base_url=f"{GW}/emb/v1")),
                  cross_encoder=OpenAIRerankerClient(config=lc))
     await g.build_indices_and_constraints()
@@ -194,15 +202,22 @@ if __name__ == "__main__":
     print(A.system, "todo", len(todo), flush=True)
     import sqlite3
     def spent():
-        c = sqlite3.connect(str(ROOT / "gateway.sqlite")); v = c.execute("select coalesce(sum(cost),0) from log where tag=?", (A.system,)).fetchone()[0]; c.close(); return v
+        c = sqlite3.connect(str(ROOT / ("gateway.sqlite" if PROVIDER == "openrouter" else f"gateway_{PROVIDER}.sqlite"))); v = c.execute("select coalesce(sum(cost),0) from log where tag=?", (A.system,)).fetchone()[0]; c.close(); return v
     if A.order: todo = [q for q in json.load(open(ROOT / A.order)) if q in set(todo)]
     if A.limit is not None: todo = todo[: max(0, A.limit - len(done))]  # --limit = total target incl. done
     s0 = spent(); print(A.system, "spent so far", round(s0, 4), flush=True)
     with ProcessPoolExecutor(A.workers, max_tasks_per_child=1) as ex:
         for i in range(0, len(todo), A.workers):
+            if PROVIDER != "openrouter" and (ROOT / "GEMINI_STOP").exists():
+                print(A.system, "STOP: gemini spend guard file present", flush=True); break
             if A.max_usd is not None and spent() >= A.max_usd:
                 print(A.system, "STOP: per-system budget reached", round(spent(), 4), flush=True); break
             for row in ex.map(worker, todo[i:i + A.workers]):
                 row["cum_usd_system"] = round(spent(), 5)
+                if A.system == "graphiti" and row.get("add_errors") and not os.environ.get("P2_KEEP_MODEL_ERRORS"):  # any failed ingest (e.g. gateway 402/stop) invalidates the question -> retry later
+                    row = {"qid": row["qid"], "error": f"incomplete ingest: {row['add_errors']} add_episode errors", "cum_usd_system": row["cum_usd_system"]}
+                if PROVIDER != "openrouter":
+                    row["provider"] = PROVIDER; row["llm_model"] = MODEL
+                    if (ROOT / "GEMINI_STOP").exists() and "error" not in row: row = {"qid": row["qid"], "error": "GEMINI_STOP during question (ingest incomplete)"}
                 with open(OUT, "a") as f: f.write(json.dumps(row) + "\n")
                 print(A.system, row["qid"], row.get("error") or (row["ingest_s"], row["ranked"][:3], row["answers"]), "cum$", row["cum_usd_system"], flush=True)

@@ -17,8 +17,9 @@ quality numbers are unaffected by load.
 | 2026-10-21 | [`published/2026-10-21-analyzer/`](published/2026-10-21-analyzer/README.md) | `porter+english` analyzer (now default), BM25 k1/b sweep, latency; section below |
 | 2026-10-20 | [`published/2026-10-20/`](published/2026-10-20/) | FTS5 backend: BEIR quality, Monte Carlo sub-corpora, 5-run determinism, scaling to 100k docs (before/after) |
 
-**Not measured yet:** the LLM-memory head-to-head against mem0, Zep/Graphiti, Letta and LangMem, and
-LongMemEval results for the LLM transforms. No numbers are claimed for them.
+**LLM-memory head-to-head** against mem0, Zep/Graphiti, Letta and LangMem (LongMemEval-S, n=30, `gpt-4o-mini`): see [`published/2026-10-24-headtohead/`](published/2026-10-24-headtohead/README.md).
+
+**Not measured yet:** LongMemEval results for the LLM transforms. No numbers are claimed for them.
 
 ---
 
