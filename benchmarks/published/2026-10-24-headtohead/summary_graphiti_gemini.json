@@ -1,0 +1,264 @@
+{
+ "_meta": {
+  "llm": "gemini-3.5-flash-lite (free tier, reasoning_effort=minimal)",
+  "embedder": "all-MiniLM-L6-v2 via local gateway (same as gpt-4o-mini run)",
+  "note": "different LLM, not directly comparable to the gpt-4o-mini rows",
+  "gateway_models_seen": [
+   "gemini-3.5-flash-lite"
+  ],
+  "gateway_llm_calls_200": 4936,
+  "gateway_cached_hits": 337,
+  "prompt_tokens": 86308950,
+  "completion_tokens": 594286,
+  "usd_total": 0.0,
+  "ingest_note": "ingest_s includes free-tier rate-limit waits / daily-quota holds / 503 retries -> not a throughput measure",
+  "rows": 30,
+  "error_rows": 0,
+  "sum_add_errors": 0,
+  "row_llm_models": [
+   "gemini-3.5-flash-lite"
+  ],
+  "max_cum_usd_system": 0.0,
+  "qids_match_subset": true,
+  "gpt4omini_ref": {
+   "median_n_edges_hit": 2.0,
+   "empty_default_search": 5,
+   "median_relaxed_edges": 69.5,
+   "mean_episodes": 48.47
+  }
+ },
+ "graphiti_gemini": {
+  "n": 30,
+  "R@5": 0.167,
+  "R@5_ci": [
+   0.033,
+   0.3
+  ],
+  "R@10": 0.167,
+  "Rall@5": 0.1,
+  "MRR@10": 0.167,
+  "query_p50_ms": 45.7,
+  "ingest_p50_s_per_haystack": 5247.5,
+  "mean_add_errors": 0.0,
+  "mean_episodes": 48.5,
+  "vs_graphiti": {
+   "diff": -0.261,
+   "ci": [
+    -0.467,
+    -0.039
+   ],
+   "sig": true,
+   "p_boot_2s": 0.0198,
+   "better": 3,
+   "worse": 11,
+   "n": 30,
+   "ref_R@5_same_q": 0.467,
+   "ref_MRR_same_q": 0.428,
+   "ref_query_p50_ms": 68.2,
+   "R@5_diff": {
+    "diff": -0.3,
+    "ci": [
+     -0.5,
+     -0.1
+    ],
+    "sig": true,
+    "p_boot_2s": 0.008,
+    "better": 2,
+    "worse": 11
+   }
+  },
+  "vs_locus": {
+   "diff": -0.75,
+   "ci": [
+    -0.883,
+    -0.608
+   ],
+   "sig": true,
+   "p_boot_2s": 0.0,
+   "better": 0,
+   "worse": 25,
+   "n": 30,
+   "ref_R@5_same_q": 1.0,
+   "ref_MRR_same_q": 0.917,
+   "ref_query_p50_ms": 3.2,
+   "R@5_diff": {
+    "diff": -0.833,
+    "ci": [
+     -0.967,
+     -0.7
+    ],
+    "sig": true,
+    "p_boot_2s": 0.0,
+    "better": 0,
+    "worse": 25
+   }
+  },
+  "vs_ompa": {
+   "diff": -0.8,
+   "ci": [
+    -0.933,
+    -0.667
+   ],
+   "sig": true,
+   "p_boot_2s": 0.0,
+   "better": 0,
+   "worse": 25,
+   "n": 30,
+   "ref_R@5_same_q": 1.0,
+   "ref_MRR_same_q": 0.967,
+   "ref_query_p50_ms": 25.2,
+   "R@5_diff": {
+    "diff": -0.833,
+    "ci": [
+     -0.967,
+     -0.7
+    ],
+    "sig": true,
+    "p_boot_2s": 0.0,
+    "better": 0,
+    "worse": 25
+   }
+  },
+  "median_n_edges_hit": 0.0,
+  "empty_default_search": 19,
+  "median_relaxed_edges": 27.5,
+  "by_type_R@5": {
+   "knowledge-update": 0.0,
+   "multi-session": 0.4,
+   "single-session-assistant": 0.4,
+   "single-session-preference": 0.0,
+   "single-session-user": 0.2,
+   "temporal-reasoning": 0.0
+  }
+ },
+ "graphiti_gemini_relaxed": {
+  "n": 30,
+  "R@5": 0.367,
+  "R@5_ci": [
+   0.2,
+   0.533
+  ],
+  "R@10": 0.4,
+  "Rall@5": 0.233,
+  "MRR@10": 0.295,
+  "query_p50_ms": 68.3,
+  "ingest_p50_s_per_haystack": 5247.5,
+  "mean_add_errors": 0.0,
+  "mean_episodes": 48.5,
+  "vs_graphiti_relaxed": {
+   "diff": -0.252,
+   "ci": [
+    -0.433,
+    -0.071
+   ],
+   "sig": true,
+   "p_boot_2s": 0.0064,
+   "better": 6,
+   "worse": 17,
+   "n": 30,
+   "ref_R@5_same_q": 0.733,
+   "ref_MRR_same_q": 0.547,
+   "ref_query_p50_ms": 72.6,
+   "R@5_diff": {
+    "diff": -0.367,
+    "ci": [
+     -0.567,
+     -0.167
+    ],
+    "sig": true,
+    "p_boot_2s": 0.0026,
+    "better": 2,
+    "worse": 13
+   }
+  },
+  "vs_graphiti": {
+   "diff": -0.133,
+   "ci": [
+    -0.349,
+    0.084
+   ],
+   "sig": false,
+   "p_boot_2s": 0.2208,
+   "better": 7,
+   "worse": 10,
+   "n": 30,
+   "ref_R@5_same_q": 0.467,
+   "ref_MRR_same_q": 0.428,
+   "ref_query_p50_ms": 68.2,
+   "R@5_diff": {
+    "diff": -0.1,
+    "ci": [
+     -0.333,
+     0.133
+    ],
+    "sig": false,
+    "p_boot_2s": 0.4776,
+    "better": 5,
+    "worse": 8
+   }
+  },
+  "vs_locus": {
+   "diff": -0.622,
+   "ci": [
+    -0.782,
+    -0.45
+   ],
+   "sig": true,
+   "p_boot_2s": 0.0,
+   "better": 1,
+   "worse": 23,
+   "n": 30,
+   "ref_R@5_same_q": 1.0,
+   "ref_MRR_same_q": 0.917,
+   "ref_query_p50_ms": 3.2,
+   "R@5_diff": {
+    "diff": -0.633,
+    "ci": [
+     -0.8,
+     -0.467
+    ],
+    "sig": true,
+    "p_boot_2s": 0.0,
+    "better": 0,
+    "worse": 19
+   }
+  },
+  "vs_ompa": {
+   "diff": -0.672,
+   "ci": [
+    -0.817,
+    -0.522
+   ],
+   "sig": true,
+   "p_boot_2s": 0.0,
+   "better": 0,
+   "worse": 23,
+   "n": 30,
+   "ref_R@5_same_q": 1.0,
+   "ref_MRR_same_q": 0.967,
+   "ref_query_p50_ms": 25.2,
+   "R@5_diff": {
+    "diff": -0.633,
+    "ci": [
+     -0.8,
+     -0.467
+    ],
+    "sig": true,
+    "p_boot_2s": 0.0,
+    "better": 0,
+    "worse": 19
+   }
+  },
+  "median_n_edges_hit": 0.0,
+  "empty_default_search": 19,
+  "median_relaxed_edges": 27.5,
+  "by_type_R@5": {
+   "knowledge-update": 0.6,
+   "multi-session": 0.6,
+   "single-session-assistant": 0.4,
+   "single-session-preference": 0.2,
+   "single-session-user": 0.4,
+   "temporal-reasoning": 0.0
+  }
+ }
+}
