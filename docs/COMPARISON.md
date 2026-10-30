@@ -174,7 +174,7 @@ Locus hybrid shares the BM25 index, so its build cost is the same index. In-memo
 
 | System | Status here | Their published number | Benchmark / metric (not comparable to R@5 or nDCG above unless stated) | Source |
 |---|---|---|---|---|
-| Zep (cloud) / Graphiti | Graphiti OSS: run 2026-10-24/26, **n=30**: R@5 0.467, MRR 0.428 (see head-to-head); Zep cloud not run (needs a Zep key) | 71.2% (gpt-4o), 63.8% (gpt-4o-mini); their full-context baseline 60.2% (gpt-4o) | LongMemEval-S end-to-end QA accuracy, GPT-4o judge (not retrieval R@5) | https://arxiv.org/abs/2501.13956 (Table 2) |
+| Zep (cloud) / Graphiti | Graphiti OSS: run 2026-10-24/26, **n=30**: R@5 0.467, MRR 0.428 (see head-to-head); a separate Graphiti OSS run on `gemini-3.5-flash-lite` (different LLM, not directly comparable): R@5 0.167, MRR 0.167; Zep cloud not run (needs a Zep key) | 71.2% (gpt-4o), 63.8% (gpt-4o-mini); their full-context baseline 60.2% (gpt-4o) | LongMemEval-S end-to-end QA accuracy, GPT-4o judge (not retrieval R@5) | https://arxiv.org/abs/2501.13956 (Table 2) |
 | mem0 with LLM extraction (default infer=True) | run 2026-10-24 on 30 LME-S questions with gpt-4o-mini: R@5 0.933, MRR 0.722 (see head-to-head) | 66.88% (Mem0), 68.44% (Mem0-graph); search p50 0.148 s | LoCoMo LLM-as-judge J (vendor paper; Zep disputes the Zep numbers in it) | https://arxiv.org/abs/2504.19413 (Table 2) |
 | Letta | 0.16.8 server: run 2026-10-24, n=30: agent R@5 0.800, MRR 0.800; direct archival-search API R@5 1.000, MRR 0.957 (see head-to-head) | 74.0% (gpt-4o-mini, filesystem agent) | LoCoMo QA accuracy (vendor blog) | https://www.letta.com/blog/benchmarking-ai-agent-memory/ |
 | LangChain LLM memory (LangMem) | run 2026-10-24 on 30 LME-S questions with gpt-4o-mini: R@5 0.767, MRR 0.606 (see head-to-head) | 58.10% | LoCoMo J, as measured by the mem0 authors (third party) | https://arxiv.org/abs/2504.19413 (Table 2) |
@@ -253,6 +253,7 @@ The CPU-only torch wheel would shrink the semantic installs, but the default `pi
 > - **mem0:** R@5 0.933, MRR 0.722 (ΔMRR vs Locus −0.19, sig.).
 > - **LangMem:** R@5 0.767, MRR 0.606 (−0.31, sig.).
 > - **Zep (Graphiti OSS), n=30:** R@5 0.467, MRR 0.428 (ΔMRR vs Locus −0.49, sig.; vs OMPA −0.54, sig.). With the cosine floor removed: R@5 0.733, MRR 0.547 (−0.37 vs Locus, sig.).
+> - **Graphiti on Gemini, n=30 (added 2026-10-30; different LLM, not directly comparable to the gpt-4o-mini rows):** `gemini-3.5-flash-lite`, free tier, $0. R@5 0.167, MRR 0.167 (ΔMRR vs Locus −0.75, sig.; vs Graphiti gpt-4o-mini −0.26, sig.). With the cosine floor removed: R@5 0.367, MRR 0.295.
 > - **Letta 0.16.8, n=30:** agent R@5 0.800, MRR 0.800 (ΔMRR vs Locus −0.12, ns; vs OMPA −0.17, sig.). Its direct archival-search API (no LLM at query): R@5 1.000, MRR 0.957 (vs Locus +0.04, ns), which is a statistical tie.
 >
 > All systems are at n=30. Graphiti was completed on 2026-10-26 with the same configuration.

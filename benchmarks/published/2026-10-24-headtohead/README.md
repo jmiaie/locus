@@ -7,7 +7,7 @@
 
 Total OpenRouter usage for this head-to-head is $15.02.
 
-A Graphiti run on Gemini (`gemini-3.5-flash-lite`, free tier) is in progress. It will be reported separately and labeled "different LLM, not directly comparable to the gpt-4o-mini rows".
+**Update 2026-10-30 (scorecard v7):** the Graphiti run on Gemini (`gemini-3.5-flash-lite`, free tier) is complete at n=30. It is reported in its own section below ("Graphiti on Gemini"), and is **different LLM, not directly comparable to the gpt-4o-mini rows**. The main table below is unchanged.
 
 ## Design
 - **Data:** LongMemEval-S (cleaned), a fixed **30-question** subset with 5 per question type, seed 20261020 (`scripts/lme_subset30.json`). Every system gets the same questions.
@@ -33,6 +33,32 @@ A Graphiti run on Gemini (`gemini-3.5-flash-lite`, free tier) is in progress. It
 | Letta 0.16.8 agent (archival_memory_search tool calls) | 30 | 0.800 [0.63, 0.93] | 0.733 | 0.800 | -0.117 [-0.292, +0.042] ns | -0.167 [-0.317, -0.033] **sig** | 3,432 ms | 120.1 s | $0.001 |
 | Letta 0.16.8 archival search API (no LLM at query) | 30 | 1.000 [1.00, 1.00] | 1.000 | 0.957 | +0.040 [-0.063, +0.142] ns | -0.010 [-0.060, +0.040] ns | 270 ms | 120.1 s | incl. above |
 LLM $ per question = system spend ÷ scored questions. For Graphiti this includes the pilot and interrupted attempts: $11.68 total, 6,544 calls and 80.0M prompt tokens.
+
+## Graphiti on Gemini (different LLM, not directly comparable to the gpt-4o-mini rows)
+Scorecard v7, added 2026-10-30. Same 30 questions, same harness (`scripts/p2_run.py` with `P2_PROVIDER=gemini`), same graphiti-core 0.31.2 + Kuzu workarounds, same local MiniLM embeddings, same scoring and paired bootstrap (B=10,000, seed 20261020). The only change is the LLM: `gemini-3.5-flash-lite` (`reasoning_effort=minimal`) on the Gemini API free tier, through `scripts/gateway_gemini.py`. Because the LLM builds the graph, these rows measure a different system and must **not** be read as a like-for-like replacement for the `gpt-4o-mini` Graphiti rows above.
+
+| System (different LLM, not directly comparable to the gpt-4o-mini rows) | n | R@5 [95% CI] | R_all@5 | MRR@10 | Query p50 | Ingest p50 / haystack | LLM $ |
+|---|---|---|---|---|---|---|---|
+| Graphiti 0.31.2, `gemini-3.5-flash-lite` (default `search`) | 30 | 0.167 [0.03, 0.30] | 0.100 | 0.167 | 46 ms | 5,247.5 s* | $0 (free tier) |
+| Graphiti, `gemini-3.5-flash-lite`, same graph, cosine floor removed | 30 | 0.367 [0.20, 0.53] | 0.233 | 0.295 | 68 ms | 5,247.5 s* | $0 (free tier) |
+
+| Gemini row | vs (same 30 q) | ref R@5 / MRR | ΔMRR@10 [95% CI], bootstrap p | ΔR@5 [95% CI], bootstrap p | better / worse (MRR) |
+|---|---|---|---|---|---|
+| default | Graphiti gpt-4o-mini (default) | 0.467 / 0.428 | -0.261 [-0.467, -0.039] **sig**, p=0.0198 | -0.300 [-0.500, -0.100] **sig**, p=0.008 | 3 / 11 |
+| default | Locus | 1.000 / 0.917 | -0.750 [-0.883, -0.608] **sig**, p<0.0001 | -0.833 [-0.967, -0.700] **sig**, p<0.0001 | 0 / 25 |
+| default | OMPA | 1.000 / 0.967 | -0.800 [-0.933, -0.667] **sig**, p<0.0001 | -0.833 [-0.967, -0.700] **sig**, p<0.0001 | 0 / 25 |
+| floor removed | Graphiti gpt-4o-mini (floor removed) | 0.733 / 0.547 | -0.252 [-0.433, -0.071] **sig**, p=0.0064 | -0.367 [-0.567, -0.167] **sig**, p=0.0026 | 6 / 17 |
+| floor removed | Graphiti gpt-4o-mini (default) | 0.467 / 0.428 | -0.133 [-0.349, +0.084] ns, p=0.2208 | -0.100 [-0.333, +0.133] ns, p=0.4776 | 7 / 10 |
+| floor removed | Locus | 1.000 / 0.917 | -0.622 [-0.782, -0.450] **sig**, p<0.0001 | -0.633 [-0.800, -0.467] **sig**, p<0.0001 | 1 / 23 |
+| floor removed | OMPA | 1.000 / 0.967 | -0.672 [-0.817, -0.522] **sig**, p<0.0001 | -0.633 [-0.800, -0.467] **sig**, p<0.0001 | 0 / 23 |
+
+\* Ingest time includes free-tier rate-limit waits, daily-quota holds and upstream 503 retries, so it is not a throughput measure. The two Gemini rows search the same graph. The ΔR@5 column and the two-sided bootstrap p-value, 2·min(P(Δ*≤0), P(Δ*≥0)), are extra outputs of `scripts/p2_gemini_analyze.py`; `p2_analyze.py` reports only the MRR CI. p<0.0001 means no bootstrap resample crossed 0 (B=10,000). No multiple-comparison correction.
+
+- **Run integrity:** 30 rows, one per subset question (ids match `scripts/lme_subset30.json`), 0 error rows, 0 `add_episode` errors in total (mean 48.5 episodes per haystack; gpt-4o-mini run 48.47). Every row and every gateway call used `gemini-3.5-flash-lite`: 4,936 successful calls (337 replayed from the gateway cache after restarts), 86.3M prompt tokens and 594k completion tokens. **LLM spend: $0.** The gateway's spend guard (stop on any non-free-tier quota or billing signal) never fired.
+- **What differs:** with Gemini, the default `search()` returned no edges for 19 of 30 questions (gpt-4o-mini graph: 5 of 30). The median number of edges hit was 0 (gpt-4o-mini: 2). With the cosine floor removed, the median number of edges returned was 27.5 (gpt-4o-mini: 69.5).
+- **R@5 by question type:** default search: knowledge-update 0.0, multi-session 0.4, single-session-assistant 0.4, single-session-preference 0.0, single-session-user 0.2, temporal-reasoning 0.0. Floor removed: knowledge-update 0.6, multi-session 0.6, single-session-assistant 0.4, single-session-preference 0.2, single-session-user 0.4, temporal-reasoning 0.0.
+- **Reading:** on this subset, Graphiti built with `gemini-3.5-flash-lite` retrieves worse than Graphiti built with `gpt-4o-mini` (ΔMRR -0.261, sig.; floor removed -0.252, sig.), and both stay far below Locus and OMPA. The Gemini run does not change any number in the main table.
+- Per-question rows: `results/lme30__graphiti_gemini.jsonl`. Summary: `summary_graphiti_gemini.json` (kept separate from `summary.json`). Supervisor: `scripts/run_gemini_graphiti.sh`. API keys are read from the environment by variable name only and never appear in any file.
 
 ## Notes
 - **mem0** (`infer=True`, local Qdrant, spaCy and fastembed extras): 2 R@5 misses, both on preference questions. About 329 memories per haystack.
