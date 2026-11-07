@@ -186,7 +186,7 @@ class H(BaseHTTPRequestHandler):
         m = str(j.get("model", ""))
         if "reasoning_effort" not in j:
             if m.startswith("gemini-2.5"): j["reasoning_effort"] = "none"
-            elif m.startswith("gemini-3"): j["reasoning_effort"] = "minimal"  # 3.x rejects "none"; minimal = lowest thinking level
+            elif m.startswith("gemini-3"): j["reasoning_effort"] = os.environ.get("GM_REASONING_EFFORT", "minimal")  # 3.x rejects "none"; minimal = lowest thinking level (override via env, default unchanged)
         for p in ("logit_bias", "logprobs", "top_logprobs", "seed", "frequency_penalty", "presence_penalty"): j.pop(p, None)
         body = json.dumps(j).encode()
         k = hashlib.sha256(rest.encode() + b"\0" + body).hexdigest()   # cache key independent of which API key serves it

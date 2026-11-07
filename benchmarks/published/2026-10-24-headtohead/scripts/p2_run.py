@@ -15,6 +15,8 @@ PROVIDER = os.environ.get("P2_PROVIDER", "openrouter")  # provider switch; defau
 if PROVIDER == "gemini":  # Gemini free tier via gateway_gemini.py (127.0.0.1:8766); MiniLM embeddings served by the same gateway
     GW = "http://127.0.0.1:8766"; MODEL = os.environ.get("P2_GEMINI_MODEL", "gemini-3.5-flash-lite")
 OUT = RES / (f"{tag}__{A.system}.jsonl" if PROVIDER == "openrouter" else f"{tag}__{A.system}_{PROVIDER}.jsonl")
+VARIANT = os.environ.get("P2_VARIANT", "")  # optional labeled re-ingest variant (e.g. "high" = Gemini reasoning_effort=high); default unchanged
+if VARIANT: OUT = OUT.with_name(OUT.stem + f"_{VARIANT}.jsonl")
 
 def dedup_sessions(sids, k=10):
     out = []
@@ -76,7 +78,7 @@ async def _graphiti(e, wd):
     from graphiti_core.nodes import EpisodeType
     route = "or" if PROVIDER == "openrouter" else "gm"
     lc = LLMConfig(api_key="dummy", model=MODEL, small_model=MODEL, base_url=f"{GW}/{route}/graphiti/v1", temperature=0)
-    wd = str(ROOT / ("graphiti_db" if PROVIDER == "openrouter" else f"graphiti_db_{PROVIDER}") / e["question_id"]); Path(wd).mkdir(parents=True, exist_ok=True)
+    wd = str(ROOT / (("graphiti_db" if PROVIDER == "openrouter" else f"graphiti_db_{PROVIDER}") + (f"_{VARIANT}" if VARIANT else "")) / e["question_id"]); Path(wd).mkdir(parents=True, exist_ok=True)
     llm_kw = {}
     if PROVIDER != "openrouter":  # gateway may hold a request for hours until the free daily quota resets: no client timeout/retries
         from openai import AsyncOpenAI
@@ -218,6 +220,7 @@ if __name__ == "__main__":
                     row = {"qid": row["qid"], "error": f"incomplete ingest: {row['add_errors']} add_episode errors", "cum_usd_system": row["cum_usd_system"]}
                 if PROVIDER != "openrouter":
                     row["provider"] = PROVIDER; row["llm_model"] = MODEL
+                    if VARIANT: row["variant"] = VARIANT; row["reasoning_effort"] = os.environ.get("GM_REASONING_EFFORT_LABEL", "")
                     if (ROOT / "GEMINI_STOP").exists() and "error" not in row: row = {"qid": row["qid"], "error": "GEMINI_STOP during question (ingest incomplete)"}
                 with open(OUT, "a") as f: f.write(json.dumps(row) + "\n")
                 print(A.system, row["qid"], row.get("error") or (row["ingest_s"], row["ranked"][:3], row["answers"]), "cum$", row["cum_usd_system"], flush=True)
