@@ -1,0 +1,235 @@
+{
+ "_meta": {
+  "llm": "gemini-3.5-flash-lite, reasoning high; different LLM setting, not directly comparable",
+  "reasoning_effort": "high",
+  "embedder": "all-MiniLM-L6-v2 via local gateway (same as gpt-4o-mini run)",
+  "note": "Do NOT publish/scorecard/PR without Jeff approval",
+  "gateway_models_seen": [
+   "gemini-3.5-flash-lite",
+   "gemini-3.1-flash-lite"
+  ],
+  "gateway_llm_calls_200_all_sqlite": 13030,
+  "gateway_cached_hits_all_sqlite": 1082,
+  "usd_total_gateway_sqlite": 0.0,
+  "rows": 35,
+  "error_or_incomplete_rows": 5,
+  "unique_good_qids": 30,
+  "sum_add_errors_on_final_good": 0,
+  "row_llm_models": [
+   "gemini-3.5-flash-lite"
+  ],
+  "row_reasoning_efforts": [
+   "high"
+  ],
+  "max_cum_usd_system": 0.0,
+  "qids_match_subset": true
+ },
+ "graphiti_gemini_high": {
+  "n": 30,
+  "R@5": 0.5,
+  "R@5_ci": [
+   0.333,
+   0.667
+  ],
+  "R@10": 0.533,
+  "Rall@5": 0.2,
+  "MRR@10": 0.467,
+  "query_p50_ms": 49.5,
+  "ingest_p50_s_per_haystack": 2987.2,
+  "mean_add_errors": 0.0,
+  "mean_episodes": 48.5,
+  "vs_graphiti": {
+   "diff": 0.039,
+   "ci": [
+    -0.2,
+    0.278
+   ],
+   "sig": false,
+   "p_boot_2s": 0.7622,
+   "better": 8,
+   "worse": 8,
+   "n": 30,
+   "ref_R@5_same_q": 0.467,
+   "ref_MRR_same_q": 0.428,
+   "ref_query_p50_ms": 68.2,
+   "R@5_diff": {
+    "diff": 0.033,
+    "ci": [
+     -0.2,
+     0.267
+    ],
+    "sig": false,
+    "p_boot_2s": 0.8826,
+    "better": 7,
+    "worse": 6
+   }
+  },
+  "vs_graphiti_gemini": {
+   "diff": 0.3,
+   "ci": [
+    0.106,
+    0.5
+   ],
+   "sig": true,
+   "p_boot_2s": 0.0026,
+   "better": 12,
+   "worse": 2,
+   "n": 30,
+   "ref_R@5_same_q": 0.167,
+   "ref_MRR_same_q": 0.167,
+   "ref_query_p50_ms": 45.7,
+   "R@5_diff": {
+    "diff": 0.333,
+    "ci": [
+     0.133,
+     0.533
+    ],
+    "sig": true,
+    "p_boot_2s": 0.0006,
+    "better": 11,
+    "worse": 1
+   }
+  },
+  "median_n_edges_hit": 4.0,
+  "empty_default_search": 1,
+  "median_relaxed_edges": 86.5,
+  "by_type_R@5": {
+   "knowledge-update": 0.8,
+   "multi-session": 0.6,
+   "single-session-assistant": 0.6,
+   "single-session-preference": 0.2,
+   "single-session-user": 0.4,
+   "temporal-reasoning": 0.4
+  }
+ },
+ "graphiti_gemini_high_relaxed": {
+  "n": 30,
+  "R@5": 0.633,
+  "R@5_ci": [
+   0.467,
+   0.8
+  ],
+  "R@10": 0.667,
+  "Rall@5": 0.367,
+  "MRR@10": 0.539,
+  "query_p50_ms": 71.8,
+  "ingest_p50_s_per_haystack": 2987.2,
+  "mean_add_errors": 0.0,
+  "mean_episodes": 48.5,
+  "vs_graphiti_relaxed": {
+   "diff": -0.009,
+   "ci": [
+    -0.202,
+    0.19
+   ],
+   "sig": false,
+   "p_boot_2s": 0.9324,
+   "better": 8,
+   "worse": 10,
+   "n": 30,
+   "ref_R@5_same_q": 0.733,
+   "ref_MRR_same_q": 0.547,
+   "ref_query_p50_ms": 72.6,
+   "R@5_diff": {
+    "diff": -0.1,
+    "ci": [
+     -0.3,
+     0.1
+    ],
+    "sig": false,
+    "p_boot_2s": 0.4366,
+    "better": 4,
+    "worse": 7
+   }
+  },
+  "vs_graphiti_gemini_relaxed": {
+   "diff": 0.244,
+   "ci": [
+    0.068,
+    0.426
+   ],
+   "sig": true,
+   "p_boot_2s": 0.0054,
+   "better": 13,
+   "worse": 5,
+   "n": 30,
+   "ref_R@5_same_q": 0.367,
+   "ref_MRR_same_q": 0.295,
+   "ref_query_p50_ms": 68.3,
+   "R@5_diff": {
+    "diff": 0.267,
+    "ci": [
+     0.1,
+     0.467
+    ],
+    "sig": true,
+    "p_boot_2s": 0.005,
+    "better": 9,
+    "worse": 1
+   }
+  },
+  "vs_graphiti": {
+   "diff": 0.111,
+   "ci": [
+    -0.118,
+    0.338
+   ],
+   "sig": false,
+   "p_boot_2s": 0.3304,
+   "better": 11,
+   "worse": 7,
+   "n": 30,
+   "ref_R@5_same_q": 0.467,
+   "ref_MRR_same_q": 0.428,
+   "ref_query_p50_ms": 68.2,
+   "R@5_diff": {
+    "diff": 0.167,
+    "ci": [
+     -0.067,
+     0.4
+    ],
+    "sig": false,
+    "p_boot_2s": 0.2376,
+    "better": 10,
+    "worse": 5
+   }
+  },
+  "vs_graphiti_gemini": {
+   "diff": 0.372,
+   "ci": [
+    0.191,
+    0.557
+   ],
+   "sig": true,
+   "p_boot_2s": 0.0,
+   "better": 15,
+   "worse": 2,
+   "n": 30,
+   "ref_R@5_same_q": 0.167,
+   "ref_MRR_same_q": 0.167,
+   "ref_query_p50_ms": 45.7,
+   "R@5_diff": {
+    "diff": 0.467,
+    "ci": [
+     0.3,
+     0.633
+    ],
+    "sig": true,
+    "p_boot_2s": 0.0,
+    "better": 14,
+    "worse": 0
+   }
+  },
+  "median_n_edges_hit": 4.0,
+  "empty_default_search": 1,
+  "median_relaxed_edges": 86.5,
+  "by_type_R@5": {
+   "knowledge-update": 0.8,
+   "multi-session": 0.8,
+   "single-session-assistant": 0.6,
+   "single-session-preference": 0.4,
+   "single-session-user": 0.6,
+   "temporal-reasoning": 0.6
+  }
+ }
+}
