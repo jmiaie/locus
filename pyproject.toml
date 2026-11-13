@@ -42,6 +42,8 @@ ompa  = ["ompa>=0.3.0"]
 dev   = ["pytest>=7.0", "pytest-cov"]
 bench = ["rank_bm25>=0.2.2"]
 rerank = ["sentence-transformers>=3"]
+# Optional dense re-rank (locus.dense.DenseReranker); off by default
+dense = ["sentence-transformers>=3"]
 
 [project.scripts]
 locus = "locus.__main__:main"
