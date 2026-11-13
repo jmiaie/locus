@@ -1,36 +1,61 @@
 <!-- mcp-name: io.github.jmiaie/locus -->
 <div align="center">
 
-# Locus
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/jmiaie/locus/main/docs/assets/hero-dark.svg">
+  <img alt="Locus: explainable, vectorless retrieval for AI agents. R@5 0.977 on LongMemEval-S (470 questions), 2.3 ms query p50, 0 LLM calls." src="https://raw.githubusercontent.com/jmiaie/locus/main/docs/assets/hero-light.svg" width="100%">
+</picture>
 
-### Vectorless RAG &nbsp;·&nbsp; MCP-Native &nbsp;·&nbsp; Zero Dependencies
+### Retrieval your agent can explain: BM25 + a temporal knowledge graph over your own files, served over MCP. No LLM, GPU, vector database or runtime dependencies.
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.2.0-blue)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-468%20passing-brightgreen?logo=pytest&logoColor=white)](tests/)
-[![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)](pyproject.toml)
-[![MCP Compatible](https://img.shields.io/badge/MCP-compatible-blueviolet)](https://modelcontextprotocol.io)
+[![PyPI](https://img.shields.io/pypi/v/locus-rag?color=blue&label=PyPI)](https://pypi.org/project/locus-rag/)
+[![Python versions](https://img.shields.io/pypi/pyversions/locus-rag)](https://pypi.org/project/locus-rag/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green?logo=opensourceinitiative&logoColor=white)](https://github.com/jmiaie/locus/blob/main/LICENSE)
+[![CI](https://github.com/jmiaie/locus/actions/workflows/ci.yml/badge.svg)](https://github.com/jmiaie/locus/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue)](https://github.com/jmiaie/locus/blob/main/CHANGELOG.md)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)](https://github.com/jmiaie/locus/blob/main/pyproject.toml)
 [![47 MCP Tools](https://img.shields.io/badge/MCP%20tools-47-blueviolet)](#mcp-tools)
-[![CI](https://github.com/jmiaie/locus/actions/workflows/ci.yml/badge.svg)](https://github.com/jmiaie/locus/actions)
-
-**Retrieval-Augmented Generation without vectors, without GPUs, without black boxes.**
-
-Every result tells you *exactly* why it was returned.
 
 [Quick Start](#quick-start) &nbsp;·&nbsp;
-[MCP Demo](#mcp-sales-demo) &nbsp;·&nbsp;
+[Why Locus](#why-locus) &nbsp;·&nbsp;
+[Benchmarks](#benchmark-results) &nbsp;·&nbsp;
 [Architecture](#architecture) &nbsp;·&nbsp;
 [MCP Tools](#mcp-tools) &nbsp;·&nbsp;
-[Benchmark Results](#benchmark-results) &nbsp;·&nbsp;
-[Companion Stack](#companion-stack) &nbsp;·&nbsp;
+[Use cases](#use-cases) &nbsp;·&nbsp;
+[Roadmap](#roadmap) &nbsp;·&nbsp;
 [CLI Reference](#cli-reference)
 
 </div>
 
 ---
 
-## Why Vectorless?
+## Why Locus?
+
+Agent memory systems such as mem0, LangMem and Graphiti call an LLM to extract facts from every conversation before
+anything can be searched. Locus indexes the text itself. On the same 30 LongMemEval-S questions, run in one harness:
+
+- **Better ranking.** MRR@10 0.917 vs mem0 0.722, LangMem 0.606 and Graphiti 0.428 (0.547 with its cosine floor
+  removed). Every one of these gaps is significant (paired bootstrap).
+- **No LLM bill.** 0 LLM calls and $0 per question. In our runs mem0 made 49 calls per question, LangMem 53 and
+  Graphiti 218 (gpt-4o-mini, upper bounds from gateway logs).
+- **Fast.** Indexing a ~48-session history takes 0.3 s, against 228 s for mem0, 238 s for LangMem and 438 s for Graphiti.
+  A query takes about 3 ms.
+- **Explainable.** Every result says why it was returned (`via=bm25`, matched terms, linked KG entities).
+- **Deterministic and local.** Pure-stdlib SQLite FTS5. The same query gives the same results, and on the default path
+  nothing leaves your machine.
+
+On the full LongMemEval-S set (470 questions) Locus reaches **R@5 0.977** and **MRR@10 0.911** at **2.3 ms** per
+query. The opt-in dense re-rank plus date-aware ranking lifts MRR to **0.937**. Method and caveats are under
+[Benchmark Results](#benchmark-results).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/jmiaie/locus/main/docs/assets/headtohead-dark.svg">
+  <img alt="MRR@10 with 95% CIs on the same 30 LongMemEval-S questions: OMPA 0.967, Letta archival API 0.957, Locus 0.917, Letta agent 0.800, mem0 0.722, LangMem 0.606, Graphiti 0.547 / 0.428." src="https://raw.githubusercontent.com/jmiaie/locus/main/docs/assets/headtohead-light.svg" width="100%">
+</picture>
+
+<sub>30-question stratified LongMemEval-S subset (low power); open-source libraries with default settings, not the vendors' managed services. Per-question rows and harness: [`benchmarks/published/2026-10-24-headtohead/`](https://github.com/jmiaie/locus/tree/main/benchmarks/published/2026-10-24-headtohead).</sub>
+
+### Vector RAG vs Locus
 
 Standard RAG pipelines require embedding models, vector databases, and GPU compute. The retrieval signal — cosine similarity — is a single opaque float that tells you nothing about *why* a document was returned. Locus takes a different path:
 
@@ -47,70 +72,24 @@ Standard RAG pipelines require embedding models, vector databases, and GPU compu
 
 ---
 
-## Retrieval Pipeline
-
-Locus retrieves in two stages. Stage 1 is always BM25 over a **SQLite FTS5** inverted index
-(stdlib `sqlite3`, no extra packages). Stage 2 is an **optional** re-rank of the BM25 candidates
-with five graph/metadata signals, fused with weighted Reciprocal Rank Fusion.
-
-```
-  Query ──► Stage 1: BM25 (SQLite FTS5)  ──► top-k chunks          mode="bm25"  (default)
-                     │
-                     └─► candidate pool (rerank_depth=100)
-                           ├─ KG            entity expansion + one hop (honours as_of)
-                           ├─ Link Walk     wikilinks from the top BM25 hits
-                           ├─ Structural    frontmatter date / tag / type
-                           ├─ Recency       frontmatter date, newest first
-                           └─ Link Popularity  inbound wikilinks
-                         weighted RRF (intent-aware, rerank_alpha=0.1) ─► top-k   mode="hybrid"
-```
-
-**Why BM25 is the default:** on the public BEIR SciFact and NFCorpus test sets the hybrid re-rank
-did **not** beat plain BM25 (paired bootstrap, see [Benchmark Results](#benchmark-results)), and every
-larger re-rank weight we tried on the dev splits made nDCG@10 worse. The re-rank stays available for
-link- and frontmatter-rich vaults: `engine.retrieve(q, mode="hybrid")`,
-`LocusEngine(retrieval_mode="hybrid")`, `LOCUS_RETRIEVAL_MODE=hybrid`, `locus retrieve --mode hybrid`,
-or `mode` on the `locus_retrieve` MCP tool. Passing `as_of` selects hybrid, since the temporal filter
-acts on KG facts.
-
-**Analyzer (how text becomes index terms).** The default is `porter+english`. It lower-cases text, drops
-the Locus stop-words plus a larger English function-word list, and applies Porter stemming with a
-pure-stdlib stemmer (`locus/memory/stemmer.py`). On every Porter-stemmable word in the BEIR corpora it
-gives the same output as SQLite FTS5's `porter` tokenizer, apart from one degenerate word.
-The other analyzers are `porter` (stemming only) and `plain` (the pre-2026-10-21 behaviour: no
-stemming, small stop-word list).
-
-How the analyzer is chosen:
-- Set it with `LocusEngine(analyzer=...)`, `LOCUS_ANALYZER=...` or `locus reindex --analyzer ...`.
-- A store remembers its analyzer.
-- Asking for a different one re-indexes from the stored chunks; source files are not re-read.
-- Stores created before analyzers existed are re-indexed with the default on first open.
-
-Index-term APIs follow the analyzer:
-- `top_terms()` and `inspect_doc()` report stems.
-- `get_posting_list("running")` is the same as `get_posting_list("run")`.
-
-Use `analyzer="plain"` to keep exact-token behaviour.
-
-| Stage-2 signal | Weight (× `rerank_alpha`) | What it captures |
-|:---|:---|:---|
-| KG Entity | intent-weighted | Entities from the query linked to documents |
-| Link Walk | intent-weighted | Candidates reachable via wikilinks from the top hits |
-| Structural | 1.0 | Frontmatter date ranges, tags, doc types |
-| Recency | 0.3 | Newer frontmatter `date` first |
-| Link Popularity | 0.2 | Hub documents cited by many others |
-
-Retrieval is **read-only**: it never writes to the store unless you pass `track=True`, which records
-hits in the hot-context bulletin and token budget (the `locus_retrieve` MCP tool does this by default
-so `locus_hot_context` keeps working; pass `track: false` for a pure read).
-
----
-
 ## Quick Start
+
+**30 seconds, nothing but Python 3.11+:**
 
 ```bash
 pip install locus-rag     # macOS / Linux: python3 -m pip install locus-rag · Windows: py -3 -m pip install locus-rag
+
+mkdir notes
+printf '# Auth\n\nJWT tokens are validated on every request by the gateway.\n' > notes/auth.md
+locus index ./notes
+locus retrieve "how are JWT tokens validated?"
+# [1] auth.md  score=...  via=bm25
+# Auth
+#
+# JWT tokens are validated on every request by the gateway.
 ```
+
+Point it at your own docs, notes or code next:
 
 **Index and retrieve in three commands:**
 
@@ -189,7 +168,24 @@ The script calls the same `locus.mcp.server` tool dispatcher an MCP client would
 
 ---
 
+### New in 1.2 (all opt-in, off by default)
+
+| Feature | How | Measured on LongMemEval-S (470 q) |
+|---|---|---|
+| Local dense re-rank | `pip install "locus-rag[dense]"`, then `LocusEngine(".locus", reranker=DenseReranker())` | MRR 0.911 → 0.934 (significant); preference questions 0.572 → 0.793 |
+| Date-aware ranking | `engine.retrieve(q, temporal=True, reference_date="2023-05-30")` | with dense: MRR 0.937; temporal-reasoning 0.872 → 0.926 (significant) |
+| Advice-query routing | `DenseReranker(route="advice")` | MRR 0.924 (significant), **tuned post hoc on LongMemEval** |
+
+Details and caveats: [Dense re-rank and date-aware ranking](#dense-re-rank-and-date-aware-ranking-optional-off-by-default).
+
+---
+
 ## Architecture
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/jmiaie/locus/main/docs/assets/architecture-dark.svg">
+  <img alt="Locus architecture: agent → interfaces (MCP, CLI, Python, HTTP) → BM25 stage 1 → optional re-rank → results with provenance; SQLite memory layer with temporal KG." src="https://raw.githubusercontent.com/jmiaie/locus/main/docs/assets/architecture-light.svg" width="100%">
+</picture>
 
 Locus is three layers — memory, retrieval, and interface — with no layer depending upward:
 
@@ -219,6 +215,65 @@ Locus is three layers — memory, retrieval, and interface — with no layer dep
 ```
 
 All storage is SQLite — no external databases, no servers, no configuration.
+
+---
+
+## Retrieval Pipeline
+
+Locus retrieves in two stages. Stage 1 is always BM25 over a **SQLite FTS5** inverted index
+(stdlib `sqlite3`, no extra packages). Stage 2 is an **optional** re-rank of the BM25 candidates
+with five graph/metadata signals, fused with weighted Reciprocal Rank Fusion.
+
+```
+  Query ──► Stage 1: BM25 (SQLite FTS5)  ──► top-k chunks          mode="bm25"  (default)
+                     │
+                     └─► candidate pool (rerank_depth=100)
+                           ├─ KG            entity expansion + one hop (honours as_of)
+                           ├─ Link Walk     wikilinks from the top BM25 hits
+                           ├─ Structural    frontmatter date / tag / type
+                           ├─ Recency       frontmatter date, newest first
+                           └─ Link Popularity  inbound wikilinks
+                         weighted RRF (intent-aware, rerank_alpha=0.1) ─► top-k   mode="hybrid"
+```
+
+**Why BM25 is the default:** on the public BEIR SciFact and NFCorpus test sets the hybrid re-rank
+did **not** beat plain BM25 (paired bootstrap, see [Benchmark Results](#benchmark-results)), and every
+larger re-rank weight we tried on the dev splits made nDCG@10 worse. The re-rank stays available for
+link- and frontmatter-rich vaults: `engine.retrieve(q, mode="hybrid")`,
+`LocusEngine(retrieval_mode="hybrid")`, `LOCUS_RETRIEVAL_MODE=hybrid`, `locus retrieve --mode hybrid`,
+or `mode` on the `locus_retrieve` MCP tool. Passing `as_of` selects hybrid, since the temporal filter
+acts on KG facts.
+
+**Analyzer (how text becomes index terms).** The default is `porter+english`. It lower-cases text, drops
+the Locus stop-words plus a larger English function-word list, and applies Porter stemming with a
+pure-stdlib stemmer (`locus/memory/stemmer.py`). On every Porter-stemmable word in the BEIR corpora it
+gives the same output as SQLite FTS5's `porter` tokenizer, apart from one degenerate word.
+The other analyzers are `porter` (stemming only) and `plain` (the pre-2026-10-21 behaviour: no
+stemming, small stop-word list).
+
+How the analyzer is chosen:
+- Set it with `LocusEngine(analyzer=...)`, `LOCUS_ANALYZER=...` or `locus reindex --analyzer ...`.
+- A store remembers its analyzer.
+- Asking for a different one re-indexes from the stored chunks; source files are not re-read.
+- Stores created before analyzers existed are re-indexed with the default on first open.
+
+Index-term APIs follow the analyzer:
+- `top_terms()` and `inspect_doc()` report stems.
+- `get_posting_list("running")` is the same as `get_posting_list("run")`.
+
+Use `analyzer="plain"` to keep exact-token behaviour.
+
+| Stage-2 signal | Weight (× `rerank_alpha`) | What it captures |
+|:---|:---|:---|
+| KG Entity | intent-weighted | Entities from the query linked to documents |
+| Link Walk | intent-weighted | Candidates reachable via wikilinks from the top hits |
+| Structural | 1.0 | Frontmatter date ranges, tags, doc types |
+| Recency | 0.3 | Newer frontmatter `date` first |
+| Link Popularity | 0.2 | Hub documents cited by many others |
+
+Retrieval is **read-only**: it never writes to the store unless you pass `track=True`, which records
+hits in the hot-context bulletin and token budget (the `locus_retrieve` MCP tool does this by default
+so `locus_hot_context` keeps working; pass `track: false` for a pure read).
 
 ---
 
@@ -623,6 +678,51 @@ Result: 5 pass  1 warn  0 fail
 
 ## Benchmark Results
 
+### Full LongMemEval-S (470 questions)
+
+| System | R@5 [95% CI] | R_all@5 | MRR@10 [95% CI] | Query p50 | Ingest p50 per history | LLM calls |
+|---|---|---|---|---|---|---|
+| **Locus** (BM25, default) | **0.977** [0.962, 0.989] | 0.860 | **0.911** [0.889, 0.931] | **2.3 ms** | **0.22 s** | 0 |
+| Locus + `DenseReranker` + `temporal=True` (opt-in) | 0.979 | 0.877 | **0.937** [0.919, 0.955] | 22 ms warm (see note) | same index | 0 |
+| OMPA (hybrid BM25 + MiniLM) | 0.981 [0.968, 0.992] | 0.877 | 0.933 [0.913, 0.950] | 26 ms | 10.1 s | 0 |
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/jmiaie/locus/main/docs/assets/by-type-dark.svg">
+  <img alt="MRR@10 by LongMemEval-S question type for Locus default, Locus with DenseReranker and temporal ranking, and OMPA." src="https://raw.githubusercontent.com/jmiaie/locus/main/docs/assets/by-type-light.svg" width="100%">
+</picture>
+
+Session-level retrieval on the 470 non-abstention questions of `longmemeval_s_cleaned.json` (about 48 sessions per
+history). R@5: an answer session is in the top 5. R_all@5: every answer session is in the top 5. 95% CIs are percentile
+paired bootstrap, B=10,000, seed 20261020. Local `all-MiniLM-L6-v2` embeddings where used, CPU only, shared 8-vCPU VM,
+so latencies are indicative. The opt-in dense re-rank embeds every candidate on the first query of a new history
+(about 12 s on 2 CPU threads); later queries take about 20–60 ms. Results and scripts:
+[`2026-11-12-lme500/`](https://github.com/jmiaie/locus/tree/main/benchmarks/published/2026-11-12-lme500) and [`2026-11-12-ranking/`](https://github.com/jmiaie/locus/tree/main/benchmarks/published/2026-11-12-ranking).
+
+**Where Locus is weakest:** preference questions ("Can you suggest a hotel for my trip?") share few words with the
+session where the preference was stated (MRR 0.572; the dense re-rank fixes most of it), and questions that need
+several sessions at once (R_all@5 0.736 on multi-session).
+
+### Cost and speed against LLM-memory libraries
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/jmiaie/locus/main/docs/assets/efficiency-dark.svg">
+  <img alt="LLM calls, LLM cost, ingest time and query latency per question on the same 30 LongMemEval-S questions, log scales. Locus and OMPA make 0 LLM calls." src="https://raw.githubusercontent.com/jmiaie/locus/main/docs/assets/efficiency-light.svg" width="100%">
+</picture>
+
+Same 30-question subset and harness as the chart at the top. mem0, LangMem and Graphiti call the LLM at ingest;
+Letta's agent calls it at query time. Cost and call counts come from our gateway logs and include pilot runs, so they
+are upper bounds.
+
+### About vendors' published numbers
+
+mem0 reports 94.4% on LongMemEval and Zep reports 90.2%. Those are **end-to-end answer accuracy**: a reader LLM
+answers from the retrieved memories and a judge LLM grades the answer, with each vendor's own models and managed
+service. The numbers on this page are **retrieval recall and ranking** with no reader and no judge. They measure
+different things and **cannot be compared directly**: high recall is necessary for a correct answer but does not
+guarantee one. Sources for every vendor number:
+[`published_competitors.md`](https://github.com/jmiaie/locus/tree/main/benchmarks/published/2026-11-12-lme500/published_competitors.md).
+
+
 ### At a glance
 
 | What | Result | Data / n | Source |
@@ -818,6 +918,34 @@ specs with revisions, RFIs, submittals, change orders, permits, a lease and OAC 
 labelled questions (`python examples/construction/demo.py`). Results are R@5 0.952 overall, and 1.000 on
 the point-in-time questions when the as-of view is used. They come from a small fictional set; treat them as a
 workflow demo, not a benchmark.
+
+---
+
+## Use cases
+
+- **Agent memory over your own files.** Index a notes vault, a docs folder or a codebase and give Claude Code, Cursor
+  or Claude Desktop a `locus_retrieve` tool that explains its answers.
+- **Regulated and audited work.** `explain()` shows the matched terms and KG facts behind each result, and retrieval
+  is deterministic, so a reviewer can reproduce it. [CognitionOS](#companion-stack) builds audit, RBAC and retention
+  on top.
+- **Point-in-time questions.** `as_of="2024-01-01"` returns only facts valid on that date: spec revisions, change
+  orders, leases, org charts. See the synthetic [construction demo](https://github.com/jmiaie/locus/tree/main/examples/construction).
+- **On-prem and air-gapped.** No model downloads on the default path; a container image and an offline bundle are
+  described under [On-prem deployment](#on-prem-deployment-container-or-offline-bundle).
+- **Bigger corpora.** About 93 ms p50 per query at 100k documents on one node, or a built-in
+  [multi-node cluster](#multi-node-cluster).
+
+## Roadmap
+
+From [`docs/ROADMAP.md`](https://github.com/jmiaie/locus/blob/main/docs/ROADMAP.md); dates are not commitments.
+
+- **Next:** idempotent re-ingest of OMPA vaults; KG invalidation that follows OMPA; vault-relative provenance; a
+  one-page OMPA + Locus bundle quick start.
+- **Later:** RRF weights tuned on public dev splits; an optional reduced `--profile bundle` tool set; reading OMPA's
+  KG in place; HTTP hardening for remote use.
+- **Measured headroom:** questions that need several sessions at once (R_all@5 0.74–0.77 on multi-session and
+  temporal questions) are the largest remaining gap on LongMemEval-S.
+- **Not planned:** a runtime vector database inside Locus. Dense scoring stays an opt-in extra.
 
 ---
 
