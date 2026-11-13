@@ -9,6 +9,8 @@ Prose triples are extracted automatically during indexing via extractor.py.
 import re
 import sqlite3
 import logging
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
@@ -55,6 +57,7 @@ class TemporalKG:
     ):
         self.db_path = str(db_path)
         self.resolver = resolver
+        self._reuse = threading.local()
         self._init_db()
 
     def _init_db(self) -> None:
@@ -69,6 +72,43 @@ class TemporalKG:
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
+
+    def __getstate__(self) -> dict:
+        # The per-thread connection slot cannot be pickled or deep-copied and
+        # means nothing in a copy: a copy starts with no connection held.
+        state = self.__dict__.copy()
+        state.pop("_reuse", None)
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._reuse = threading.local()
+
+    def _read_conn(self) -> sqlite3.Connection:
+        """Connection for a read: the one :meth:`reuse_connection` holds for this
+        thread, else a new one."""
+        return getattr(self._reuse, "conn", None) or self._conn()
+
+    @contextmanager
+    def reuse_connection(self):
+        """Serve this thread's point lookups from one connection for the block.
+
+        Each lookup otherwise opens its own connection, which is most of the
+        cost of a burst of small reads.  The connection is thread-local, so
+        concurrent callers never share one, and only read methods opt in:
+        paths that set pragmas on or close their connection keep ``_conn()``.
+        Re-entrant.
+        """
+        if getattr(self._reuse, "conn", None) is not None:
+            yield
+            return
+        conn = self._conn()
+        self._reuse.conn = conn
+        try:
+            yield
+        finally:
+            self._reuse.conn = None
+            conn.close()
 
     def _resolve(self, entity: str) -> str:
         return self.resolver.resolve(entity) if self.resolver else entity
@@ -114,7 +154,7 @@ class TemporalKG:
             )
             params += [as_of, as_of]
         sql += " ORDER BY id"
-        with self._conn() as conn:
+        with self._read_conn() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [Triple(*row) for row in rows]
 
@@ -143,7 +183,7 @@ class TemporalKG:
             )
             params += [as_of, as_of]
         sql += " GROUP BY source ORDER BY MIN(id)"
-        with self._conn() as conn:
+        with self._read_conn() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [r[0] for r in rows]
 
