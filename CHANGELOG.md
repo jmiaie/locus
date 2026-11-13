@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+---
+
+## [1.2.0] — 2026-11-12
+
+API-compatible feature release. Every new feature is opt-in; default rankings are unchanged from 1.1.0.
+
 ### Added — opt-in ranking features (off by default; no change for existing users)
 - **`locus.dense.DenseReranker`** (new extra `locus-rag[dense]`): local MiniLM embeddings scored per document as a max over ~200-word windows, then fused with the BM25 document ranking by RRF (k=60). It plugs into the existing `LocusEngine(reranker=...)` hook. A reranker that has a `bind(engine)` method is now bound to its engine so it can read full document text. On LongMemEval-S (n=470): ΔMRR +0.024 (significant); preference questions 0.572 → 0.793.
 - **`route="advice"`** on `DenseReranker`: applies the dense fusion only to advice/recommendation-style queries. It was tuned post hoc on LongMemEval and is not a default. ΔMRR +0.013 (significant), 12 questions better and 0 worse.
