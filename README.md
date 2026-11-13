@@ -367,6 +367,39 @@ It is opt-in. Use it where a few hundred milliseconds is acceptable, or on a GPU
 
 The model is downloaded from the Hugging Face Hub on first use; after that, set `HF_HUB_OFFLINE=1`. Hub telemetry is disabled by default.
 
+### Dense re-rank and date-aware ranking (optional, off by default)
+
+```bash
+pip install "locus-rag[dense]"   # sentence-transformers + PyTorch; only needed for DenseReranker
+```
+```python
+from locus.dense import DenseReranker
+engine = LocusEngine(".locus", reranker=DenseReranker())          # all-MiniLM-L6-v2, CPU, fused with BM25 by RRF
+engine.retrieve("can you suggest a hotel for my trip?")             # BM25 + dense
+engine.retrieve("can you suggest a hotel for my trip?", rerank=False)  # plain BM25
+
+# Date-aware ranking (stdlib only): documents whose frontmatter `date` falls in the window a query refers to
+# ("3 weeks ago", "last Tuesday", "yesterday", "last weekend", "last week", "last month") are boosted.
+engine.retrieve("what did I buy two weeks ago?", temporal=True, reference_date="2023-05-30")
+LocusEngine(".locus", temporal=True)                                # or make it the engine default
+```
+
+- **Dense re-rank:** each candidate document from the BM25 pool (300 chunks) is scored by the best cosine between the query and ~200-word windows of the document. That ranking is fused with the BM25 document ranking by RRF (k=60). Window embeddings are cached per document.
+- **`DenseReranker(route="advice")`** fuses only for advice/recommendation-style queries (recommend, suggest, tips, ideas, advice). **This option was tuned post hoc on LongMemEval**: the rule was written after seeing per-type results there. It is not validated on other data and is not a default.
+- **Date-aware ranking** recognises point-in-time references only. Duration ranges ("past few months", "last 3 months") are ignored, and so is any window wider than 45 days. Undated documents are never boosted, queries without a time reference are unaffected, and there is no general recency boost.
+
+**Measured on LongMemEval-S** (470 questions, session-level, paired bootstrap B=10,000; harness, rows and the earlier prototype numbers are in [`benchmarks/published/2026-11-12-ranking/`](benchmarks/published/2026-11-12-ranking/)):
+
+| Setting | MRR@10 | ΔMRR vs BM25 [95% CI] | Notable |
+|---|---|---|---|
+| BM25 (default) | 0.911 | — | |
+| `temporal=True` | 0.912 | +0.001 [−0.008, +0.010], not significant | temporal-reasoning +0.018 (not significant) |
+| `DenseReranker()` | 0.934 | **+0.024 [+0.008, +0.040], significant** | preference questions 0.572 → 0.793; R_all@5 +0.028 (significant) |
+| `DenseReranker()` + `temporal=True` | 0.937 | **+0.027 [+0.009, +0.045], significant** | temporal-reasoning 0.872 → 0.926 (significant) |
+| `DenseReranker(route="advice")` (post hoc) | 0.924 | **+0.013 [+0.006, +0.022], significant** | 12 questions better, 0 worse |
+
+The first dense query on a new ~48-session corpus embeds every candidate document: about 12 s on 2 CPU threads. Later queries hit the embedding cache and take about 20–60 ms. Results are from one dataset. See the benchmark README for caveats and how they compare with the prototype.
+
 ### LLM query transformations (optional)
 
 ```python

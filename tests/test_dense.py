@@ -146,3 +146,11 @@ def test_real_model_smoke(store):  # pragma: no cover - only with the extra inst
     eng = LocusEngine(store_path=store, reranker=DenseReranker(threads=1))
     res = eng.retrieve("can you suggest a hotel for my trip?", limit=5, use_cache=False)
     assert res and "b.md" in _docs(res)
+
+
+def test_small_cache_eviction_does_not_break_scoring(store):
+    rr = DenseReranker(encoder=bow, cache_docs=1)
+    eng = LocusEngine(store_path=store, reranker=rr)
+    for q in ("slab hotel", "concrete beach", "slab hotel"):
+        assert eng.retrieve(q, limit=5, use_cache=False)
+    assert len(rr._cache) == 1

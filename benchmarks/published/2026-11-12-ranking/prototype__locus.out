@@ -1,0 +1,18 @@
+n 470 baseline identical to run: 470 | windows detected per type: {'knowledge-update': [2, 72], 'multi-session': [18, 121], 'single-session-assistant': [0, 56], 'single-session-preference': [0, 30], 'single-session-user': [4, 64], 'temporal-reasoning': [22, 127]} | fired: 40
+baseline                         R@5 0.9766 Rall@5 0.8596 MRR 0.9107 [0.889, 0.9311] NDCG 0.9043
+    knowledge-update MRR 0.983; multi-session MRR 0.926; single-session-assistant MRR 1.000; single-session-preference MRR 0.572; single-session-user MRR 0.959; temporal-reasoning MRR 0.872
++ deeper pool only (pad to 10 sessions) R@5 0.9766 Rall@5 0.8596 MRR 0.9107 [0.889, 0.9311] NDCG 0.9046 | dMRR +0.0000 [0.0, 0.0] ns p=1.0 b/w 0/0 | dRall +0.0000 ns
+    knowledge-update MRR 0.983 (+0.000); multi-session MRR 0.926 (+0.000); single-session-assistant MRR 1.000 (+0.000); single-session-preference MRR 0.572 (+0.000); single-session-user MRR 0.959 (+0.000); temporal-reasoning MRR 0.872 (+0.000)
++ time-window                    R@5 0.9809 Rall@5 0.8532 MRR 0.9118 [0.8907, 0.932] NDCG 0.9005 | dMRR +0.0011 [-0.0085, 0.0103] ns p=0.828 b/w 10/4 | dRall -0.0064 ns
+    knowledge-update MRR 0.983 (+0.000); multi-session MRR 0.918 (-0.008); single-session-assistant MRR 1.000 (+0.000); single-session-preference MRR 0.572 (+0.000); single-session-user MRR 0.943 (-0.016); temporal-reasoning MRR 0.892 (+0.020)
++ MiniLM (RRF)                   R@5 0.9809 Rall@5 0.8894 MRR 0.9239 [0.9046, 0.9423] NDCG 0.9240 | dMRR +0.0132 [-0.0042, 0.0306] ns p=0.1344 b/w 43/28 | dRall +0.0298 SIG
+    knowledge-update MRR 0.965 (-0.017); multi-session MRR 0.931 (+0.004); single-session-assistant MRR 0.991 (-0.009); single-session-preference MRR 0.776 (+0.204*); single-session-user MRR 0.924 (-0.035); temporal-reasoning MRR 0.899 (+0.028)
++ MiniLM + time-window           R@5 0.9809 Rall@5 0.8702 MRR 0.9267 [0.9079, 0.9446] NDCG 0.9177 | dMRR +0.0160 [-0.0032, 0.0354] ns p=0.1026 b/w 46/28 | dRall +0.0106 ns
+    knowledge-update MRR 0.965 (-0.017); multi-session MRR 0.924 (-0.003); single-session-assistant MRR 0.991 (-0.009); single-session-preference MRR 0.776 (+0.204*); single-session-user MRR 0.908 (-0.051); temporal-reasoning MRR 0.924 (+0.053*)
++ advice-query router -> MiniLM RRF (post-hoc) R@5 0.9766 Rall@5 0.8596 MRR 0.9228 [0.9026, 0.9421] NDCG 0.9139 | dMRR +0.0121 [0.0043, 0.0208] SIG p=0.0014 b/w 12/1 | dRall +0.0000 ns
+    knowledge-update MRR 0.983 (+0.000); multi-session MRR 0.926 (+0.000); single-session-assistant MRR 1.000 (+0.000); single-session-preference MRR 0.761 (+0.190*); single-session-user MRR 0.959 (+0.000); temporal-reasoning MRR 0.872 (+0.000)
++ recency prior (w=0.5)          R@5 0.9106 Rall@5 0.5872 MRR 0.6704 [0.6388, 0.7012] NDCG 0.6918 | dMRR -0.2404 [-0.2736, -0.2068] SIG p=0.0 b/w 30/203 | dRall -0.2723 SIG
+    knowledge-update MRR 0.737 (-0.246*); multi-session MRR 0.727 (-0.199*); single-session-assistant MRR 0.532 (-0.468*); single-session-preference MRR 0.397 (-0.175*); single-session-user MRR 0.490 (-0.468*); temporal-reasoning MRR 0.795 (-0.076*)
+MiniLM only (max-window)         R@5 0.9723 Rall@5 0.8745 MRR 0.9124 [0.8913, 0.9328] NDCG 0.9057 | dMRR +0.0017 [-0.0214, 0.0248] ns p=0.8932 b/w 49/45 | dRall +0.0149 ns
+    knowledge-update MRR 0.954 (-0.029); multi-session MRR 0.920 (-0.006); single-session-assistant MRR 1.000 (+0.000); single-session-preference MRR 0.806 (+0.234*); single-session-user MRR 0.888 (-0.070*); temporal-reasoning MRR 0.880 (+0.009)
+time-window subset: {'MRR_base': 0.6852, 'MRR_tw': 0.6985, 'paired_MRR': {'diff': 0.0133, 'ci': [-0.1, 0.1225], 'sig': False, 'p_boot_2s': 0.7998, 'better': 10, 'worse': 4}, 'Rall_base': 0.375, 'Rall_tw': 0.3}

@@ -169,7 +169,12 @@ class DenseReranker:
         """Max-cosine dense score of each document in *docs*."""
         texts = self._doc_texts(docs, pool)
         keys = {d: (d, hashlib.sha256(texts[d].encode("utf-8", "replace")).hexdigest()) for d in docs}
-        todo = [d for d in docs if keys[d] not in self._cache]
+        vecs_of: dict[str, list] = {}
+        for d in docs:  # cache hits (refreshed in the LRU)
+            if keys[d] in self._cache:
+                self._cache.move_to_end(keys[d])
+                vecs_of[d] = self._cache[keys[d]]
+        todo = [d for d in docs if d not in vecs_of]
         wins, owner = [], []
         for d in todo:
             for w in text_windows(texts[d], self.window_words, self.stride_words):
@@ -177,19 +182,15 @@ class DenseReranker:
                 owner.append(d)
         vecs = self.encode([query] + wins)
         qv, wv = vecs[0], vecs[1:]
-        new: dict[str, list] = {}
-        for d, v in zip(owner, wv):
-            new.setdefault(d, []).append(v)
         for d in todo:
-            self._cache[keys[d]] = new.get(d, [])
-            while len(self._cache) > self.cache_docs:
-                self._cache.popitem(last=False)
-        scores: dict[str, float] = {}
-        for d in docs:
-            vs = self._cache[keys[d]]
-            self._cache.move_to_end(keys[d])
-            scores[d] = max((_dot(qv, v) for v in vs), default=-1.0)
-        return scores
+            vecs_of[d] = []
+        for d, v in zip(owner, wv):
+            vecs_of[d].append(v)
+        for d in todo:
+            self._cache[keys[d]] = vecs_of[d]
+        while len(self._cache) > self.cache_docs:
+            self._cache.popitem(last=False)
+        return {d: max((_dot(qv, v) for v in vecs_of[d]), default=-1.0) for d in docs}
 
     def rerank(self, query: str, chunks: list, limit: int | None = None) -> list:
         """Fuse the pool's BM25 document order with the dense order (RRF); see module docstring."""

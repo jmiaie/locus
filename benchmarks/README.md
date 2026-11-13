@@ -12,6 +12,7 @@ quality numbers are unaffected by load.
 
 | Date | Folder | What it measures |
 |---|---|---|
+| 2026-11-12 | [`published/2026-11-12-ranking/`](published/2026-11-12-ranking/README.md) | Opt-in `DenseReranker` (incl. post-hoc advice router) and date-aware `temporal=True` on LongMemEval-S n=470, plus OMPA `search(temporal=True)`; implemented vs prototype |
 | 2026-10-23 | [`published/2026-10-23-llm/`](published/2026-10-23-llm/README.md) | Optional LLM query transforms (rewrite / multi-query / HyDE, `gpt-4o-mini`) on BEIR SciFact + NFCorpus; includes the exact LLM outputs |
 | 2026-10-23 | [`published/2026-10-23-ragpack/`](published/2026-10-23-ragpack/summary.json) | Chunking options, parent-child, RM3, cross-encoder rerank vs the default (BEIR, LongMemEval-S, construction demo); write-up in [`docs/COMPARISON.md`](../docs/COMPARISON.md#rag-feature-pack-2026-10-23) |
 | 2026-10-21 | [`published/2026-10-21-analyzer/`](published/2026-10-21-analyzer/README.md) | `porter+english` analyzer (now default), BM25 k1/b sweep, latency; section below |
