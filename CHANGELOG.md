@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — opt-in ranking features (off by default; no change for existing users)
+- **`locus.dense.DenseReranker`** (new extra `locus-rag[dense]`): local MiniLM embeddings scored per document as a max over ~200-word windows, then fused with the BM25 document ranking by RRF (k=60). It plugs into the existing `LocusEngine(reranker=...)` hook. A reranker that has a `bind(engine)` method is now bound to its engine so it can read full document text. On LongMemEval-S (n=470): ΔMRR +0.024 (significant); preference questions 0.572 → 0.793.
+- **`route="advice"`** on `DenseReranker`: applies the dense fusion only to advice/recommendation-style queries. It was tuned post hoc on LongMemEval and is not a default. ΔMRR +0.013 (significant), 12 questions better and 0 worse.
+- **Date-aware ranking**: `retrieve(..., temporal=True, reference_date=...)` and `LocusEngine(temporal=True, temporal_depth=300)`, in `locus/retrieval/temporal.py` (standard library only). Documents whose frontmatter `date` falls in the window a point-in-time phrase refers to ("3 weeks ago", "last Tuesday", ...) are boosted by RRF. Duration ranges are ignored, and there is no recency prior. Alone: ΔMRR +0.001 (not significant). With dense: temporal-reasoning +0.054 (significant). Details: `benchmarks/published/2026-11-12-ranking/`.
+
 ---
 
 ## [1.1.0] — 2026-10-24

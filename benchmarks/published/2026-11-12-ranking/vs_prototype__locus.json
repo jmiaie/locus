@@ -1,0 +1,30 @@
+{
+ "temporal": {
+  "prototype_variant": "+ time-window",
+  "n": 470,
+  "identical_top10": 450,
+  "same_top1": 468,
+  "same_reciprocal_rank": 467
+ },
+ "dense": {
+  "prototype_variant": "+ MiniLM (RRF)",
+  "n": 470,
+  "identical_top10": 198,
+  "same_top1": 459,
+  "same_reciprocal_rank": 451
+ },
+ "dense_temporal": {
+  "prototype_variant": "+ MiniLM + time-window",
+  "n": 470,
+  "identical_top10": 185,
+  "same_top1": 457,
+  "same_reciprocal_rank": 450
+ },
+ "dense_advice": {
+  "prototype_variant": "+ advice-query router -> MiniLM RRF (post-hoc)",
+  "n": 470,
+  "identical_top10": 460,
+  "same_top1": 469,
+  "same_reciprocal_rank": 469
+ }
+}

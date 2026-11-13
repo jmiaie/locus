@@ -12,6 +12,14 @@ Retrieval is two-stage, no embeddings required:
       LinkPopularity — inbound wikilink count
     fused with the BM25 ranking by weighted Reciprocal Rank Fusion.
 
+Optional, off by default (no behaviour change unless enabled):
+  - ``reranker=`` a second-stage reranker, e.g. ``locus.rerank.CrossEncoderReranker``
+    or ``locus.dense.DenseReranker`` (local embeddings fused with BM25 by RRF;
+    ``pip install "locus-rag[dense]"``).
+  - ``temporal=True`` — date-aware ranking: documents whose frontmatter
+    ``date`` lies in a window the query refers to ("two weeks ago", "last
+    Friday") are boosted (see :mod:`locus.retrieval.temporal`).
+
 ``mode="bm25"`` (the default) returns stage 1 only.  On the public BEIR
 SciFact and NFCorpus test sets the stage-2 re-rank did not significantly
 beat BM25 (see ``benchmarks/README.md``), so it is opt-in:
@@ -44,6 +52,7 @@ from .context.packer import ContextPacker, PackedContext
 from .retrieval.fusion import rrf_fuse
 from .retrieval.filters import MetadataFilter
 from .retrieval.prf import RM3Config
+from .retrieval.temporal import parse_doc_date, parse_relative_windows, time_window_boost, to_date
 from .retrieval.classifier import classify_query, INTENT_WEIGHTS, QueryIntent
 from .retrieval.streaming import StreamingConfig, StreamingRetriever
 from .context.bulletin import ContextBulletin
@@ -77,10 +86,17 @@ RERANK_SIGNALS = ("kg", "links", "structural", "recency", "link_pop")
 #: BM25 candidates re-ranked in hybrid mode (at least ``limit``).
 #: Selected on BEIR dev splits (SciFact train, NFCorpus dev) from {40, 100, 200}.
 RERANK_DEPTH = 100
+#: Candidate chunks examined by the optional date-aware (temporal) ranking.
+TEMPORAL_DEPTH = 300
 #: Multiplier on all stage-2 signal weights relative to BM25.  Selected on the
 #: same dev splits from {0.1, 0.25, 0.5, 1.0}; larger values hurt nDCG there.
 #: Corpora rich in wikilinks/frontmatter may prefer a larger value.
 RERANK_ALPHA = 0.1
+
+
+def _today():
+    import datetime
+    return datetime.date.today()
 
 
 def _default_mode() -> str:
@@ -111,6 +127,8 @@ class LocusEngine:
         rm3: "RM3Config | dict | None" = None,
         reranker=None,
         follow_symlinks=None,
+        temporal: bool = False,
+        temporal_depth: int = TEMPORAL_DEPTH,
     ):
         """
         chunking: chunk size/overlap/heading-context/boundary options (see
@@ -123,6 +141,11 @@ class LocusEngine:
         reranker: optional second-stage reranker, e.g.
         ``locus.rerank.CrossEncoderReranker`` (``pip install "locus[rerank]"``);
         when set, ``retrieve`` reranks by default (``rerank=False`` to skip).
+        A reranker with a ``bind(engine)`` method is bound to this engine
+        (``locus.dense.DenseReranker`` uses it to read full document text).
+        temporal: default for ``retrieve(..., temporal=)`` (off).  Date-aware
+        ranking over the top *temporal_depth* candidate chunks; see
+        :mod:`locus.retrieval.temporal`.
         """
         self.store_path = Path(store_path)
         self.store_path.mkdir(parents=True, exist_ok=True)
@@ -142,6 +165,12 @@ class LocusEngine:
         )
         self.rm3 = RM3Config.from_value(rm3)
         self.reranker = reranker
+        if reranker is not None and callable(getattr(reranker, "bind", None)):
+            reranker.bind(self)
+        self.temporal = bool(temporal)
+        self.temporal_depth = int(temporal_depth)
+        if self.temporal_depth < 1:
+            raise ValueError("temporal_depth must be >= 1")
         self.kg = TemporalKG(str(self.store_path / "kg.sqlite3"), resolver=self.resolver)
         self.bulletin = ContextBulletin(
             archive_path=self.store_path / "archive",
@@ -262,6 +291,8 @@ class LocusEngine:
         parent: str | None = None,
         rm3: "RM3Config | dict | None" = None,
         rerank: bool | None = None,
+        temporal: bool | None = None,
+        reference_date=None,
     ) -> list[ScoredChunk]:
         """
         Retrieve the top *limit* chunks for *query*.
@@ -278,6 +309,14 @@ class LocusEngine:
 
         rerank: rerank the top candidates with the engine's ``reranker``
         (default: on when the engine has one).  Raises if True without one.
+
+        temporal: date-aware ranking (default: the engine's ``temporal``, off).
+        Relative time references in *query* ("3 weeks ago", "last Tuesday",
+        "yesterday", "last weekend", "last week", "last month") are resolved
+        against *reference_date* (``date``/``datetime`` or ``"YYYY-MM-DD"``;
+        default today) and documents whose frontmatter ``date`` falls in that
+        window are boosted by RRF.  Duration ranges ("past few months") are
+        ignored.  Queries without such a reference are unaffected.
 
         filters: restrict results by document metadata: path glob, type, tags,
         date range, point-in-time ``as_of`` (respects ``supersedes``) and custom
@@ -323,6 +362,12 @@ class LocusEngine:
         if rerank and self.reranker is None:
             raise ValueError("rerank=True needs LocusEngine(reranker=...), see locus.rerank")
         rr = self.reranker if (rerank is None or rerank) else None
+        if temporal is None:
+            temporal = self.temporal
+        windows = []
+        if temporal:
+            ref = to_date(reference_date) if reference_date is not None else _today()
+            windows = parse_relative_windows(query, ref)
 
         key = None
         fused: list[ScoredChunk] | None = None
@@ -331,7 +376,8 @@ class LocusEngine:
                 query, limit, as_of, use_links, intent.value if intent else "-", mode, sig,
             ) + (("|f:" + mfilter.key()) if mfilter else "") + (
                 f"|x:rm3:{rm3cfg.key()}" if expansion else "") + (f"|p:{parent}" if parent else "") + (
-                f"|r:{rr.key()}" if rr is not None else "")
+                f"|r:{rr.key()}" if rr is not None else "") + (
+                f"|t:{self.temporal_depth}:" + ";".join(f"{a}/{b}" for a, b in windows) if windows else "")
             if key in self._query_cache:
                 self._cache_hits += 1
                 fused = self._query_cache[key]
@@ -353,6 +399,15 @@ class LocusEngine:
                 def base(n: int) -> list[ScoredChunk]:
                     pool = first(max(n, rr.depth))
                     return rr.rerank(query, pool, limit=n)
+            if windows:
+                untimed = base
+
+                def base(n: int) -> list[ScoredChunk]:
+                    pool = untimed(max(n, self.temporal_depth))
+                    dates = self._doc_dates(pool)
+                    if not any(d is not None and any(lo <= d <= hi for lo, hi in windows) for d in dates.values()):
+                        return untimed(n)  # nothing dated in the window: exactly the untimed ranking
+                    return time_window_boost(pool, windows, dates, n)
             if parent:
                 def fetch(n: int) -> list[ScoredChunk]:
                     return self._parents(base, n, parent)
@@ -369,6 +424,11 @@ class LocusEngine:
         if track:
             self._track(fused, label=mode)
         return list(fused)
+
+    def _doc_dates(self, chunks: list[ScoredChunk]) -> dict:
+        """``{doc_path: date | None}`` from each document's frontmatter ``date``."""
+        fms = self.corpus.doc_frontmatter(list(dict.fromkeys(c.doc_path for c in chunks)))
+        return {p: parse_doc_date(fm.get("date")) for p, fm in fms.items()}
 
     def filter_matches(self, doc_paths: list[str], filters: "MetadataFilter | dict | None") -> dict[str, bool]:
         """``{doc_path: passes}`` for *filters* (see :mod:`locus.retrieval.filters`)."""
