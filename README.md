@@ -12,7 +12,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/locus-rag)](https://pypi.org/project/locus-rag/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green?logo=opensourceinitiative&logoColor=white)](https://github.com/jmiaie/locus/blob/main/LICENSE)
 [![CI](https://github.com/jmiaie/locus/actions/workflows/ci.yml/badge.svg)](https://github.com/jmiaie/locus/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.2.0-blue)](https://github.com/jmiaie/locus/blob/main/CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue)](https://github.com/jmiaie/locus/blob/main/CHANGELOG.md)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)](https://github.com/jmiaie/locus/blob/main/pyproject.toml)
 [![47 MCP Tools](https://img.shields.io/badge/MCP%20tools-47-blueviolet)](#mcp-tools)
 
@@ -669,7 +669,7 @@ Locus Doctor
 [WARN]  bulletin             Tier 0 (pinned) is full — oldest entries will be demoted
 [PASS]  entity_resolver      14 aliases registered
 [PASS]  store_size           3.21 MB at .locus
-[PASS]  version              Locus v1.2.0
+[PASS]  version              Locus v1.3.0
 
 Result: 5 pass  1 warn  0 fail
 ```

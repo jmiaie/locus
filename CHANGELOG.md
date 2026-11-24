@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+---
+
+## [1.3.0] — 2026-11-24
+
+API-compatible feature release. `explain_many` is new; `explain()` returns what it did in 1.2.0 and
+rankings are unchanged.
+
 ### Added
 
 - `LocusEngine.explain_many(chunk_ids, query=None)`: explains several chunks against one query and
