@@ -67,7 +67,7 @@ from .feedback import RelevanceFeedback
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 # Fixed weights appended after intent weights: [structural, recency]
 _STRUCTURAL_WEIGHT  = 1.0

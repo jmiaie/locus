@@ -880,18 +880,18 @@ def test_extractor_skips_long_sentences():
 
 def test_resolver_add_and_resolve(tmp_path):
     r = EntityResolver(tmp_path / "resolver.sqlite3")
-    r.add_alias("Jeff", "Jeff Milam")
-    assert r.resolve("Jeff") == "Jeff Milam"
-    assert r.resolve("Jeff Milam") == "Jeff Milam"  # canonical → itself
+    r.add_alias("Alex", "Alex Rivera")
+    assert r.resolve("Alex") == "Alex Rivera"
+    assert r.resolve("Alex Rivera") == "Alex Rivera"  # canonical → itself
     assert r.resolve("Unknown") == "Unknown"
 
 
 def test_resolver_cache(tmp_path):
     r = EntityResolver(tmp_path / "resolver.sqlite3")
-    r.add_alias("jmiaie", "Jeff Milam")
+    r.add_alias("arivera", "Alex Rivera")
     # Second call should use cache
-    assert r.resolve("jmiaie") == "Jeff Milam"
-    assert "jmiaie" in r._cache
+    assert r.resolve("arivera") == "Alex Rivera"
+    assert "arivera" in r._cache
 
 
 def test_resolver_persist_across_instances(tmp_path):
@@ -905,11 +905,11 @@ def test_resolver_persist_across_instances(tmp_path):
 
 def test_resolver_suggest(tmp_path):
     r = EntityResolver(tmp_path / "resolver.sqlite3")
-    entities = ["Jeff Milam", "Jeff", "Alice Smith", "Alice", "Bob"]
+    entities = ["Alex Rivera", "Alex", "Alice Smith", "Alice", "Bob"]
     suggestions = r.suggest_aliases(entities, threshold=0.5)
     pairs = [(s["entity_a"], s["entity_b"]) for s in suggestions]
-    # "Jeff Milam" and "Jeff" should be suggested
-    assert any("Jeff" in a and "Jeff" in b for a, b in pairs)
+    # "Alex Rivera" and "Alex" should be suggested
+    assert any("Alex" in a and "Alex" in b for a, b in pairs)
 
 
 def test_resolver_stats(tmp_path):
@@ -970,13 +970,13 @@ def test_kg_all_entities(tmp_path):
 
 def test_kg_resolver_transparent(tmp_path):
     resolver = EntityResolver(str(tmp_path / "resolver.sqlite3"))
-    resolver.add_alias("Jeff", "Jeff Milam")
+    resolver.add_alias("Alex", "Alex Rivera")
     kg = TemporalKG(str(tmp_path / "kg.sqlite3"), resolver=resolver)
-    kg.add_triple("Jeff", "leads", "Platform")
+    kg.add_triple("Alex", "leads", "Platform")
     # Querying by canonical should find it
-    triples = kg.query_entity("Jeff Milam")
+    triples = kg.query_entity("Alex Rivera")
     assert len(triples) >= 1
-    assert triples[0].subject == "Jeff Milam"
+    assert triples[0].subject == "Alex Rivera"
 
 
 # -----------------------------------------------------------------------
@@ -1023,16 +1023,16 @@ def test_engine_find_contradictions(tmp_path):
 
 def test_engine_add_alias_and_resolve(tmp_path):
     engine = LocusEngine(store_path=tmp_path / ".locus")
-    engine.add_alias("Jeff", "Jeff Milam")
-    engine.add_fact("Jeff", "leads", "Platform")
-    facts = engine.query_entity("Jeff Milam")
+    engine.add_alias("Alex", "Alex Rivera")
+    engine.add_fact("Alex", "leads", "Platform")
+    facts = engine.query_entity("Alex Rivera")
     assert len(facts["facts"]) >= 1
 
 
 def test_engine_suggest_aliases(tmp_path):
     engine = LocusEngine(store_path=tmp_path / ".locus")
-    engine.add_fact("Jeff Milam", "leads", "Platform")
-    engine.add_fact("Jeff", "works_at", "Acme")
+    engine.add_fact("Alex Rivera", "leads", "Platform")
+    engine.add_fact("Alex", "works_at", "Acme")
     result = engine.suggest_aliases(threshold=0.5)
     assert "suggestions" in result
     assert "entity_count" in result
@@ -2669,7 +2669,7 @@ def test_github_bridge_matches():
 def test_version_is_0_8_0():
     # Retained for history; version is now 1.0.0
     from locus.core import __version__
-    assert __version__ == "1.3.0"
+    assert __version__ == "1.3.1"
 
 
 # -----------------------------------------------------------------------
@@ -2906,7 +2906,7 @@ def test_snapshot_inspect_missing(tmp_path):
 def test_version_is_0_9_0():
     # retained for history; version is now 1.0.0
     from locus.core import __version__
-    assert __version__ == "1.3.0"
+    assert __version__ == "1.3.1"
 
 
 # -----------------------------------------------------------------------
@@ -3216,7 +3216,7 @@ def test_engine_mark_relevant_irrelevant(tmp_path):
 
 def test_version_is_1_0_0():
     from locus.core import __version__
-    assert __version__ == "1.3.0"
+    assert __version__ == "1.3.1"
 
 
 # -----------------------------------------------------------------------

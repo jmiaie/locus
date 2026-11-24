@@ -2,7 +2,7 @@
 Entity resolver — maps entity name variants to canonical names.
 
 Enables transparent de-duplication in the KG:
-    "Jeff", "Jeff Milam", "jmiaie"  →  same canonical entity
+    "Alex", "Alex Rivera", "arivera"  →  same canonical entity
 
 Manual aliases are added via add_alias(). suggest_aliases() uses
 token-overlap similarity to surface candidates for human review.

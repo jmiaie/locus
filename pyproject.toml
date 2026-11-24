@@ -4,13 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "locus-rag"
-version = "1.3.0"
+version = "1.3.1"
 description = "Vectorless RAG with MCP — BM25 + temporal KG + link walking. Zero dependencies."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
-    {name = "Jeff Milam", email = "jmiaie@users.noreply.github.com"},
+    {name = "Micap AI", email = "info@micap.pro"},
+]
+maintainers = [
+    {name = "Micap AI", email = "info@micap.pro"},
 ]
 keywords = ["rag", "retrieval", "mcp", "knowledge-graph", "bm25", "vectorless", "llm", "ai"]
 classifiers = [

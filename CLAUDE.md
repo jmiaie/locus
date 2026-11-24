@@ -24,7 +24,7 @@ locus --help             # CLI entry point
 
 **Prose extraction is automatic** — during `index()`, `TemporalKG.populate_from_file()` runs the prose extractor on every file. 14 relation patterns extract S-P-O triples from natural language. No annotation required.
 
-**Entity resolution is transparent** — `EntityResolver` sits inside `TemporalKG`. `add_triple("Jeff", ...)` resolves "Jeff" → "Jeff Milam" before writing if the alias is registered. `query_entity("Jeff")` also resolves first.
+**Entity resolution is transparent** — `EntityResolver` sits inside `TemporalKG`. `add_triple("Alex", ...)` resolves "Alex" → "Alex Rivera" before writing if the alias is registered. `query_entity("Alex")` also resolves first.
 
 **Bulletin is write-through** — `ContextBulletin(db_path=...)` persists all tier0/tier1 entries to `bulletin.sqlite3` on every mutation. On init it reloads from DB. The hot tier survives restarts.
 
