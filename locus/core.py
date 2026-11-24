@@ -927,12 +927,44 @@ class LocusEngine:
         Works with any chunk_id regardless of whether it came from a prior
         retrieve() call.
         """
-        from .memory.corpus import tokenize
+        return self._explain(chunk_id, query, {})
+
+    def explain_many(self, chunk_ids: list[str], query: str = None) -> list[dict]:
+        """
+        Explain several chunks against one query, in order.
+
+        Returns what calling :meth:`explain` once per chunk returns, as long
+        as nothing is written to the stores while the batch runs: per-query
+        and per-entity lookups are made once and reused, so a fact committed
+        between two chunks of one batch is seen by neither or by both, where
+        separate :meth:`explain` calls would see it from the second chunk on.
+
+        The difference is cost: everything that depends only on the query
+        (its terms and their posting lists, its entities and the documents
+        they link to, its structural hints) is computed once for the batch
+        instead of once per chunk, facts about an entity are fetched once
+        however many chunks mention it, and the lookups share one connection
+        per store.  Explaining the top results of a query is the common case
+        and was costing several times the retrieval that produced them.
+        """
+        chunk_ids = list(chunk_ids)
+        memo: dict = {"chunk_ids": list(dict.fromkeys(chunk_ids))}
+        with self.corpus.reuse_connection(), self.kg.reuse_connection():
+            return [self._explain(chunk_id, query, memo) for chunk_id in chunk_ids]
+
+    def _explain(self, chunk_id: str, query: str | None, memo: dict) -> dict:
+        """One explanation.  *memo* carries the per-query and per-entity
+        lookups, so a batch shares them; a single explain passes an empty one."""
         from .retrieval.kg_retrieval import extract_query_entities
         from .retrieval.structural import (
             _extract_date_range, _extract_tags, _extract_type,
             _date_in_range, _tag_overlap,
         )
+
+        def once(key, compute):
+            if key not in memo:
+                memo[key] = compute()
+            return memo[key]
 
         chunk = self.corpus.get_chunk(chunk_id)
         if not chunk:
@@ -953,17 +985,26 @@ class LocusEngine:
 
         if query:
             # BM25 — which query terms appear in this chunk?
-            terms = self.corpus.analyze(query)
-            matched = [t for t in terms if chunk_id in self.corpus._posting_list(t)]
+            terms = once("terms", lambda: self.corpus.analyze(query))
+            batch = memo.get("chunk_ids") or [chunk_id]
+            matched = [
+                t for t in terms
+                if chunk_id in once(
+                    ("contains", t), lambda t=t: self.corpus.chunks_containing(t, batch)
+                )
+            ]
             if matched:
                 result["bm25_matched_terms"] = matched
                 signals.append(f"BM25: terms [{', '.join(matched)}] appear in this chunk")
 
             # KG — which query entities link to this document?
-            query_entities = extract_query_entities(query)
+            query_entities = once("entities", lambda: extract_query_entities(query))
             kg_hits: list[str] = []
             for entity in query_entities[:8]:
-                if chunk.doc_path in self.kg.sources_for_entity(entity):
+                sources = once(
+                    ("sources", entity), lambda e=entity: self.kg.sources_for_entity(e)
+                )
+                if chunk.doc_path in sources:
                     kg_hits.append(entity)
             if kg_hits:
                 result["kg_matched_entities"] = kg_hits
@@ -973,13 +1014,13 @@ class LocusEngine:
 
             # Structural — does frontmatter match date/tag/type signals?
             structural: list[str] = []
-            dr = _extract_date_range(query)
+            dr = once("dates", lambda: _extract_date_range(query))
             if dr and _date_in_range(fm.get("date", ""), *dr):
                 structural.append(f"date {fm['date']} in range {dr[0]}–{dr[1]}")
-            qt = _extract_tags(query)
+            qt = once("tags", lambda: _extract_tags(query))
             if qt and _tag_overlap(fm.get("tags", ""), qt) > 0:
                 structural.append(f"tags matched: {qt}")
-            qtype = _extract_type(query)
+            qtype = once("type", lambda: _extract_type(query))
             if qtype:
                 doc_type = fm.get("type", fm.get("category", "")).lower()
                 if qtype in doc_type or doc_type in qtype:
@@ -991,7 +1032,7 @@ class LocusEngine:
         # KG context — facts about entities mentioned in this chunk
         kg_context: list[dict] = []
         for entity in chunk.metadata.get("entities", [])[:5]:
-            triples = self.kg.query_entity(entity)
+            triples = once(("facts", entity), lambda e=entity: self.kg.query_entity(e))
             if triples:
                 t0 = triples[0]
                 kg_context.append({

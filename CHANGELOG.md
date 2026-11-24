@@ -7,6 +7,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `LocusEngine.explain_many(chunk_ids, query=None)`: explains several chunks against one query and
+  returns exactly what `explain()` returns for each, in order. Work that depends only on the query
+  (its terms and posting lists, its entities and the documents they link to, its structural hints)
+  is done once per batch instead of once per chunk, facts about an entity are fetched once however
+  many chunks mention it, and the lookups share one connection per store. On the construction demo
+  corpus, explaining the top 5 results of a query drops from 26.9 ms to 1.8 ms (p50) and the top 20
+  from 104 ms to 5.4 ms; `explain()` is unchanged in output.
+- `explain()` and `explain_many()` no longer read whole posting lists to decide which query terms a
+  chunk contains. They ask the index about the chunks being explained (`Corpus.chunks_containing`).
+  The old lookup cost time and memory in proportion to the corpus and returned one row per posting;
+  with several threads doing it at once the interpreter lock changed hands on every row and
+  throughput fell below that of one thread. On an 11,000-chunk corpus, explaining 5 results went
+  from 14 ms to 1 ms on one thread and from 7 to 393 batches/s on eight; a service calling it under
+  16 concurrent requests went from 4 to 92 requests/s.
+- `Corpus.reuse_connection()` / `TemporalKG.reuse_connection()`: serve the calling thread's point
+  lookups (`get_chunk`, posting lists, `sources_for_entity`, `query_entity`) from one connection for
+  the duration of a block. Thread-local and re-entrant; write paths are unaffected.
+
 ---
 
 ## [1.2.0] — 2026-11-12

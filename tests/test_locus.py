@@ -1115,6 +1115,195 @@ def test_explain_structural_match(tmp_path):
 
 
 # -----------------------------------------------------------------------
+# explain_many — batched explanations
+# -----------------------------------------------------------------------
+
+def _explain_corpus(tmp_path, backend=None):
+    """A few documents that exercise every explain signal: shared terms,
+    frontmatter dates/tags, and KG facts about entities the chunks mention."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "auth.md").write_text(
+        "---\ndate: 2025-02-10\ntags: planning\n---\n## Authentication\n\n"
+        "Alice owns JWT authentication for the Platform team.\n\n"
+        "## Rotation\n\nJWT signing keys rotate every quarter."
+    )
+    (docs / "billing.md").write_text(
+        "## Billing\n\nBob owns billing. Invoices use JWT authentication from Platform."
+    )
+    (docs / "notes.md").write_text("## Notes\n\nNothing about the query here at all.")
+    kwargs = {"index_backend": backend} if backend else {}
+    engine = LocusEngine(store_path=tmp_path / ".locus", **kwargs)
+    engine.index(docs)
+    engine.add_fact("Alice", "leads", "Platform", source="auth.md")
+    engine.add_fact("Bob", "reports_to", "Alice", source="billing.md")
+    ids = [c.id for d in ("auth.md", "billing.md", "notes.md") for c in engine.corpus.get_chunks_for_doc(d)]
+    assert len(ids) >= 4
+    return engine, ids
+
+
+@pytest.mark.parametrize("backend", ["fts5", "legacy"])
+@pytest.mark.parametrize("query", ["Alice JWT authentication Q1 2025 planning", "Bob billing", None])
+def test_explain_many_equals_explain_per_chunk(tmp_path, backend, query):
+    engine, ids = _explain_corpus(tmp_path, backend)
+    assert engine.explain_many(ids, query=query) == [engine.explain(i, query=query) for i in ids]
+
+
+def test_explain_many_keeps_order_and_reports_unknown_chunks_in_place(tmp_path):
+    engine, ids = _explain_corpus(tmp_path)
+    asked = [ids[2], "no-such-chunk", ids[0]]
+    out = engine.explain_many(asked, query="JWT authentication")
+    assert [r.get("chunk_id") for r in out] == [ids[2], None, ids[0]]
+    assert "error" in out[1]
+
+
+def test_explain_many_of_nothing_is_empty(tmp_path):
+    engine = LocusEngine(store_path=tmp_path / ".locus")
+    assert engine.explain_many([], query="anything") == []
+
+
+def test_explain_many_does_per_query_work_once(tmp_path):
+    """The point of the batch: the index is asked once per term, not once per
+    chunk, never for a whole posting list, and the whole batch reads through
+    one connection per store."""
+    engine, ids = _explain_corpus(tmp_path)
+    query = "Alice JWT authentication"
+    terms = engine.corpus.analyze(query)
+
+    lookups, posting_calls, corpus_conns, kg_conns = [], [], [], []
+    real_lookup, real_posting = engine.corpus.chunks_containing, engine.corpus._posting_list
+    real_cconn, real_kconn = engine.corpus._conn, engine.kg._conn
+    engine.corpus.chunks_containing = lambda t, c: (lookups.append((t, tuple(c))), real_lookup(t, c))[1]
+    engine.corpus._posting_list = lambda t: (posting_calls.append(t), real_posting(t))[1]
+    engine.corpus._conn = lambda: (corpus_conns.append(1), real_cconn())[1]
+    engine.kg._conn = lambda: (kg_conns.append(1), real_kconn())[1]
+
+    engine.explain_many(ids, query=query)
+    assert sorted(t for t, _ in lookups) == sorted(terms), "one index lookup per query term"
+    assert all(set(c) == set(ids) for _, c in lookups), "scoped to the chunks being explained"
+    assert posting_calls == [], "no whole posting list is read"
+    assert len(corpus_conns) == 1 and len(kg_conns) == 1
+
+    lookups.clear()
+    for chunk_id in ids:
+        engine.explain(chunk_id, query=query)
+    assert len(lookups) == len(terms) * len(ids), "the unbatched cost, for contrast"
+    assert posting_calls == []
+
+
+@pytest.mark.parametrize("backend", ["fts5", "legacy"])
+def test_chunks_containing_agrees_with_the_posting_list(tmp_path, backend):
+    engine, ids = _explain_corpus(tmp_path, backend)
+    corpus = engine.corpus
+    for term in corpus.analyze("Alice JWT authentication billing quarter nothing zebra"):
+        expected = set(corpus._posting_list(term)) & set(ids)
+        assert corpus.chunks_containing(term, ids) == expected, term
+        assert corpus.chunks_containing(term, ids[:1]) == expected & set(ids[:1])
+    assert corpus.chunks_containing("jwt", []) == set()
+    assert corpus.chunks_containing("jwt", ["no-such-chunk"]) == set()
+
+
+def test_reuse_connection_is_per_thread_and_released(tmp_path):
+    import threading
+
+    engine, ids = _explain_corpus(tmp_path)
+    corpus = engine.corpus
+    seen = {}
+
+    with corpus.reuse_connection():
+        held = corpus._read_conn()
+        assert corpus._read_conn() is held
+        with corpus.reuse_connection():          # re-entrant: same connection
+            assert corpus._read_conn() is held
+        assert corpus._read_conn() is held       # inner exit must not release it
+
+        def other():
+            seen["conn"] = corpus._read_conn()
+            seen["chunk"] = corpus.get_chunk(ids[0])
+
+        t = threading.Thread(target=other)
+        t.start()
+        t.join()
+        assert seen["conn"] is not held, "another thread must never be handed this one"
+        assert seen["chunk"] is not None
+
+    assert corpus._read_conn() is not held
+    with pytest.raises(Exception):
+        held.execute("SELECT 1")                 # closed on exit
+
+
+def test_writes_inside_a_reuse_block_are_unaffected(tmp_path):
+    """Write paths set pragmas on and close their own connection; they must not
+    be handed the shared read connection."""
+    engine, ids = _explain_corpus(tmp_path)
+    with engine.corpus.reuse_connection(), engine.kg.reuse_connection():
+        before = engine.corpus.get_chunk(ids[0])
+        (tmp_path / "docs" / "late.md").write_text("## Late\n\nA late addition about zebras.")
+        engine.index(tmp_path / "docs")
+        engine.add_fact("Zebra", "is_a", "Animal", source="late.md")
+        assert engine.corpus.get_chunk(ids[0]).content == before.content
+        assert engine.corpus.get_chunks_for_doc("late.md"), "the write landed and is readable"
+    assert engine.retrieve("zebras", limit=1)[0].doc_path == "late.md"
+
+
+def test_explain_many_is_safe_under_concurrent_callers(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    engine, ids = _explain_corpus(tmp_path)
+    queries = ["Alice JWT authentication", "Bob billing", "Q1 2025 planning", "Platform"]
+    expected = {q: [engine.explain(i, query=q) for i in ids] for q in queries}
+
+    def run(q):
+        return q, engine.explain_many(ids, query=q)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for q, got in pool.map(run, queries * 12):
+            assert got == expected[q]
+
+
+def test_engine_and_stores_can_still_be_copied_and_pickled(tmp_path):
+    """The per-thread connection slot is a threading.local, which cannot be
+    pickled.  Copies must work as they did before it was added, and must not
+    inherit a connection the original is holding."""
+    import copy
+    import pickle
+
+    engine, ids = _explain_corpus(tmp_path)
+    expected = engine.explain_many(ids, query="Alice JWT authentication")
+
+    for store in (engine.corpus, engine.kg):
+        with store.reuse_connection():
+            clone = pickle.loads(pickle.dumps(store))
+            assert getattr(clone._reuse, "conn", None) is None
+        assert getattr(copy.deepcopy(store)._reuse, "conn", None) is None
+
+    twin = copy.deepcopy(engine)
+    assert twin.explain_many(ids, query="Alice JWT authentication") == expected
+
+
+def test_explain_many_reads_entity_facts_once_per_batch(tmp_path):
+    """Documented difference from per-chunk explain: a fact written while a
+    batch runs is not seen part-way through it."""
+    engine, ids = _explain_corpus(tmp_path)
+    real = engine._explain
+    calls = []
+
+    def explain_then_write(chunk_id, query, memo):
+        out = real(chunk_id, query, memo)
+        if not calls:
+            engine.add_fact("Bob", "owns", "billing", source="billing.md")
+        calls.append(chunk_id)
+        return out
+
+    engine._explain = explain_then_write
+    batch = engine.explain_many(ids, query="Bob billing")
+    engine._explain = real
+    # A second batch, with nothing written during it, sees the new fact.
+    assert engine.explain_many(ids, query="Bob billing") == [engine.explain(i, query="Bob billing") for i in ids]
+    assert len(batch) == len(ids)
+
+
+# -----------------------------------------------------------------------
 # Phase 4 — MCP Resources
 # -----------------------------------------------------------------------
 

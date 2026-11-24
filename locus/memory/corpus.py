@@ -30,6 +30,8 @@ import math
 import os
 import re
 import sqlite3
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -278,6 +280,7 @@ class Corpus:
         self.follow_symlinks = _symlink_mode(follow_symlinks)
         self.store_path.mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.store_path / "corpus.sqlite3")
+        self._reuse = threading.local()
         self._section_aware = section_aware
         self._requested_chunking = normalize_chunking(chunking) if chunking is not None else _env_chunking()
         self.chunking: dict = dict(CHUNKING_DEFAULTS)
@@ -438,6 +441,43 @@ class Corpus:
 
     def _conn(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
+
+    def __getstate__(self) -> dict:
+        # The per-thread connection slot cannot be pickled or deep-copied and
+        # means nothing in a copy: a copy starts with no connection held.
+        state = self.__dict__.copy()
+        state.pop("_reuse", None)
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._reuse = threading.local()
+
+    def _read_conn(self) -> sqlite3.Connection:
+        """Connection for a read: the one :meth:`reuse_connection` holds for this
+        thread, else a new one."""
+        return getattr(self._reuse, "conn", None) or self._conn()
+
+    @contextmanager
+    def reuse_connection(self):
+        """Serve this thread's point lookups from one connection for the block.
+
+        Each lookup otherwise opens its own connection, which is most of the
+        cost of a burst of small reads.  The connection is thread-local, so
+        concurrent callers never share one, and only read methods opt in:
+        paths that set pragmas on or close their connection keep ``_conn()``.
+        Re-entrant.
+        """
+        if getattr(self._reuse, "conn", None) is not None:
+            yield
+            return
+        conn = self._conn()
+        self._reuse.conn = conn
+        try:
+            yield
+        finally:
+            self._reuse.conn = None
+            conn.close()
 
     def _invalidate_stats(self) -> None:
         self.generation += 1
@@ -699,7 +739,7 @@ class Corpus:
         )
 
     def get_chunk(self, chunk_id: str) -> Optional[Chunk]:
-        with self._conn() as conn:
+        with self._read_conn() as conn:
             row = conn.execute(
                 "SELECT id, doc_path, content, start_word, metadata "
                 "FROM chunks WHERE id = ?",
@@ -946,10 +986,40 @@ class Corpus:
         """
         return self._posting_list(self.index_term(term))
 
+    def chunks_containing(self, term: str, chunk_ids: list[str]) -> set[str]:
+        """Which of *chunk_ids* contain the already-analysed index *term*.
+
+        Asks the index only about the given chunks.  Reading the term's whole
+        posting list to answer this costs time and memory in proportion to the
+        corpus, and returns one row per posting: with several threads doing
+        that at once the interpreter lock changes hands on every row and
+        throughput falls below that of a single thread.
+        """
+        if not chunk_ids:
+            return set()
+        found: set[str] = set()
+        with self._read_conn() as conn:
+            for i in range(0, len(chunk_ids), 500):
+                part = chunk_ids[i:i + 500]
+                ph = ",".join("?" * len(part))
+                if self.backend == "fts5":
+                    rows = conn.execute(
+                        f"SELECT c.id FROM chunks c WHERE c.id IN ({ph}) AND c.rowid IN "
+                        "(SELECT rowid FROM chunk_fts WHERE chunk_fts MATCH ?)",
+                        [*part, _fts_query([term])],
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        f"SELECT chunk_id FROM term_index WHERE term = ? AND chunk_id IN ({ph})",
+                        [term, *part],
+                    ).fetchall()
+                found.update(r[0] for r in rows)
+        return found
+
     def _posting_list(self, term: str) -> dict[str, float]:
         """Posting list for an already-analysed index *term*."""
         if self.backend == "fts5":
-            with self._conn() as conn:
+            with self._read_conn() as conn:
                 rows = conn.execute(
                     "SELECT c.id, COUNT(*), c.n_tokens FROM chunk_fts_inst v "
                     "JOIN chunks c ON c.rowid = v.doc WHERE v.term = ? "
@@ -957,7 +1027,7 @@ class Corpus:
                     (term,),
                 ).fetchall()
             return {r[0]: (r[1] / r[2] if r[2] else 0.0) for r in rows}
-        with self._conn() as conn:
+        with self._read_conn() as conn:
             rows = conn.execute(
                 "SELECT chunk_id, tf FROM term_index WHERE term = ? ORDER BY chunk_id", (term,)
             ).fetchall()
